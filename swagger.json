@@ -1,0 +1,428 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "StarDeliveryServices",
+    "description": "API to play the Star Delivery game. \nThese methods have what is necessary for you to play the game. \n\nThe order for you to play the game is : \n\nGetPlanetsAndRoutes allows you to get the map necessaru to play the game. The Main Routes allow you to save 50% of the fuel. The Other Routes allow you to save 25%\n\nGetDailyChallenge will show you the Challenge of the day, all 3 levels of it. With it you can use your map to build a route. Don&#39;t forget that it needs to start at the &quot;StartPlanet&quot;, if it has Mandatory planets, they need to be included in the Submission route, and there can not be duplicated planets (except the StartPlanet at the end)\n\n\nCalculateCoaxium will allow you to verify your route and understand if it&#39;s valid , and how much coaxium is being used.\n\nFinally you can use SubmitChallengeSolution to submit a route and unblock your next level of this channel",
+    "version": "1"
+  },
+  "basePath": "/StarDelivery_Ngin/rest/StarDeliveryServices",
+  "schemes": [
+    "https"
+  ],
+  "paths": {
+    "/CalculateCoaxium": {
+      "post": {
+        "tags": [
+          "StarDeliveryServices"
+        ],
+        "description": "Calculates the estimated Coaxium cost for a submitted route without persisting challenge completion. \nInputs: &#39;PlayerGuid&#39; identifies the player, \n&#39;PlayerEmail&#39; confirms the player email \n&#39;ChallengeId&#39; identifies the challenge to evaluate\n&#39;RouteSubmission&#39; contains the ordered list of submitted planets for the route.",
+        "operationId": "CalculateCoaxium",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "PlayerGuid",
+            "in": "header",
+            "required": true,
+            "type": "string",
+            "default": "",
+            "description": "Unique player identifier sent in the request header for authentication."
+          },
+          {
+            "name": "PlayerEmail",
+            "in": "header",
+            "required": true,
+            "type": "string",
+            "default": "",
+            "description": "Player email address sent in the request header for authentication."
+          },
+          {
+            "name": "ChallengeId",
+            "in": "query",
+            "required": true,
+            "type": "integer",
+            "x-example": 1234567891234567,
+            "format": "int64",
+            "description": "Identifier of the challenge being evaluated."
+          },
+          {
+            "name": "RouteSubmission",
+            "in": "body",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/PlanetSimple"
+              },
+              "description": "Submitted route containing the ordered list of planets to evaluate for coaxium cost.\nThe order accounted will be the natural order of the List. "
+            },
+            "description": "Submitted route containing the ordered list of planets to evaluate for coaxium cost.\nThe order accounted will be the natural order of the List. "
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the result of the coaxium calculation for the submitted route, including whether the route is valid, the feedback message, and the calculated coaxium amount.",
+            "schema": {
+              "$ref": "#/definitions/SubmissionResult"
+            }
+          }
+        }
+      }
+    },
+    "/GetActiveLevelDailyChallenge": {
+      "get": {
+        "tags": [
+          "StarDeliveryServices"
+        ],
+        "description": "Returns the active not finished leve of the current daily challenges available for the authenticated player. Inputs: &#39;PlayerGuid&#39; identifies the player and &#39;PlayerEmail&#39; confirms the player email used for authentication.\n\nThe output is a List of 3 Challenges, representing and order by the Level dificulty 1,2 and 3\n\nChallengeId - Identifier of the Challenge to use to submit the solution\nChallengeName - The name of the Challenge of the day with denomination for the level difficulty\nStartPlanetId - The PlanetId from where the submission should start amd finish\nMandatoryPlanets - List of the mandatory planets for this challenge (PlanetId,Name). This planets MUST be present on your solution.  Disregards the Bonus attribute\nForbiddenPlanets - List of the forbidden planets for this challenge (PlanetId,Name). This planets CAN&#39;T be present on your solution. Disregards the Bonus attribute\nBonusPlanets - List of the Bonus planets for this challenge (PlanetId,Name,Bonus). This planets contain coaxium reducing the you Coaxium spent in your route\nIsFinished - Boolean representing if you have submitted a solution for this challenge level\nLevel - Can be Level1,Level2 or Level3. Each level can only be completed if the previous ones are already completed\n",
+        "operationId": "GetActiveLevelDailyChallenge",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "PlayerGuid",
+            "in": "header",
+            "required": true,
+            "type": "string",
+            "default": "",
+            "description": "Unique player identifier sent in the request header for authentication."
+          },
+          {
+            "name": "PlayerEmail",
+            "in": "header",
+            "required": true,
+            "type": "string",
+            "default": "",
+            "description": "Player email address sent in the request header for authentication."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the list of daily challenges available to the authenticated player, including challenge details, related planets, and completion status.",
+            "schema": {
+              "$ref": "#/definitions/ChallengeOut"
+            }
+          }
+        }
+      }
+    },
+    "/GetDailyChallenge": {
+      "get": {
+        "tags": [
+          "StarDeliveryServices"
+        ],
+        "description": "Returns the current daily challenges available for the authenticated player. Inputs: &#39;PlayerGuid&#39; identifies the player and &#39;PlayerEmail&#39; confirms the player email used for authentication.\n\nThe output is a List of 3 Challenges, representing and order by the Level dificulty 1,2 and 3\n\nChallengeId - Identifier of the Challenge to use to submit the solution\nChallengeName - The name of the Challenge of the day with denomination for the level difficulty\nStartPlanetId - The PlanetId from where the submission should start amd finish\nMandatoryPlanets - List of the mandatory planets for this challenge (PlanetId,Name). This planets MUST be present on your solution.  Disregards the Bonus attribute\nForbiddenPlanets - List of the forbidden planets for this challenge (PlanetId,Name). This planets CAN&#39;T be present on your solution. Disregards the Bonus attribute\nBonusPlanets - List of the Bonus planets for this challenge (PlanetId,Name,Bonus). This planets contain coaxium reducing the you Coaxium spent in your route\nIsFinished - Boolean representing if you have submitted a solution for this challenge level\nLevel - Can be Level1,Level2 or Level3. Each level can only be completed if the previous ones are already completed\n",
+        "operationId": "GetDailyChallenge",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "PlayerGuid",
+            "in": "header",
+            "required": true,
+            "type": "string",
+            "default": "",
+            "description": "Unique player identifier sent in the request header for authentication."
+          },
+          {
+            "name": "PlayerEmail",
+            "in": "header",
+            "required": true,
+            "type": "string",
+            "default": "",
+            "description": "Player email address sent in the request header for authentication."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the list of daily challenges available to the authenticated player, including challenge details, related planets, and completion status.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ChallengeOut"
+              },
+              "description": "Returns the list of daily challenges available to the authenticated player, including challenge details, related planets, and completion status."
+            }
+          }
+        }
+      }
+    },
+    "/GetPlanetsAndRoutes": {
+      "get": {
+        "tags": [
+          "StarDeliveryServices"
+        ],
+        "description": "Returns the game map data available to the authenticated player, including planets and routes. Inputs: &#39;PlayerGuid&#39; identifies the player and &#39;PlayerEmail&#39; confirms the player email used for authentication.",
+        "operationId": "GetPlanetsAndRoutes",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "PlayerGuid",
+            "in": "header",
+            "required": true,
+            "type": "string",
+            "default": "",
+            "description": "Unique player identifier sent in the request header for authentication."
+          },
+          {
+            "name": "PlayerEmail",
+            "in": "header",
+            "required": true,
+            "type": "string",
+            "default": "",
+            "description": "Player email address sent in the request header for authentication."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the map data used by the game, including the list of planets and the available routes between them.",
+            "schema": {
+              "$ref": "#/definitions/StarDeliveryMap"
+            }
+          }
+        }
+      }
+    },
+    "/SubmitChallengeSolution": {
+      "post": {
+        "tags": [
+          "StarDeliveryServices"
+        ],
+        "description": "Validates and submits a player route for a challenge, persisting the final result and returning the submission outcome. Inputs: &#39;PlayerGuid&#39; identifies the player, &#39;PlayerEmail&#39; confirms the player email, &#39;ChallengeId&#39; identifies the challenge being submitted, and &#39;RouteSubmission&#39; contains the ordered list of submitted planets for the solution.",
+        "operationId": "SubmitChallengeSolution",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "PlayerGuid",
+            "in": "header",
+            "required": true,
+            "type": "string",
+            "default": "",
+            "description": "Unique player identifier sent in the request header for authentication."
+          },
+          {
+            "name": "PlayerEmail",
+            "in": "header",
+            "required": true,
+            "type": "string",
+            "default": "",
+            "description": "Player email address sent in the request header for authentication."
+          },
+          {
+            "name": "ChallengeId",
+            "in": "query",
+            "required": true,
+            "type": "integer",
+            "x-example": 1234567891234567,
+            "format": "int64",
+            "description": "Identifier of the challenge being submitted."
+          },
+          {
+            "name": "RouteSubmission",
+            "in": "body",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/PlanetSimple"
+              },
+              "description": "Submitted route containing the ordered list of planets to evaluate for coaxium cost.\nThe order accounted will be the natural order of the List. "
+            },
+            "description": "Submitted route containing the ordered list of planets to evaluate for coaxium cost.\nThe order accounted will be the natural order of the List. "
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the result of the challenge submission, including whether the submission succeeded, the feedback message, and the final coaxium score.",
+            "schema": {
+              "$ref": "#/definitions/SubmissionResult"
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "ChallengeOut": {
+      "description": "",
+      "type": "object",
+      "properties": {
+        "ChallengeId": {
+          "type": "integer",
+          "example": 1234567891234567,
+          "format": "int64"
+        },
+        "ChallengeName": {
+          "type": "string",
+          "default": ""
+        },
+        "StartPlanetId": {
+          "type": "string",
+          "default": ""
+        },
+        "MandatoryPlanets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PlaneMapSimple"
+          }
+        },
+        "ForbiddenPlanets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PlaneMapSimple"
+          }
+        },
+        "BonusPlanets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PlaneMapSimple"
+          }
+        },
+        "IsFinished": {
+          "type": "boolean",
+          "example": false
+        },
+        "Level": {
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
+    "PlaneMapSimple": {
+      "description": "",
+      "type": "object",
+      "properties": {
+        "PlanetId": {
+          "type": "integer",
+          "example": 1234567891234567,
+          "format": "int64"
+        },
+        "Name": {
+          "type": "string",
+          "default": ""
+        },
+        "Bonus": {
+          "type": "integer",
+          "example": 1234,
+          "format": "int32"
+        }
+      }
+    },
+    "PlanetOut": {
+      "description": "Planet from the game where you go to do your deliveries. \nEach planet has an Id, Name , Coordinate_X, Coordinate_Y\nId - Unique identifier of the planet. Can be used to shorten the Json.\nName - Name of the planet. Also unique. More readable to humans\nCoordinate_X - The planets are distributed in the galaxy in a 2D cartisian representation. This is the X coordinate\nCoordinate_X - The planets are distributed in the galaxy in a 2D cartisian representation. This is the y coordinate",
+      "type": "object",
+      "properties": {
+        "Id": {
+          "type": "integer",
+          "example": 1234567891234567,
+          "format": "int64"
+        },
+        "Name": {
+          "type": "string",
+          "default": ""
+        },
+        "Coordinate_X": {
+          "type": "number",
+          "example": 0.1
+        },
+        "Coordinate_Y": {
+          "type": "number",
+          "example": 0.1
+        }
+      },
+      "required": [
+        "Id"
+      ]
+    },
+    "PlanetSimple": {
+      "description": "",
+      "type": "object",
+      "properties": {
+        "PlanetId": {
+          "type": "integer",
+          "example": 1234567891234567,
+          "format": "int64"
+        },
+        "Name": {
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
+    "RouteOut": {
+      "description": "",
+      "type": "object",
+      "properties": {
+        "From_Planet": {
+          "type": "integer",
+          "example": 1234567891234567,
+          "format": "int64"
+        },
+        "To_PlanetId": {
+          "type": "integer",
+          "example": 1234567891234567,
+          "format": "int64"
+        },
+        "RouteType": {
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
+    "StarDeliveryMap": {
+      "description": "",
+      "type": "object",
+      "properties": {
+        "Planets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PlanetOut"
+          }
+        },
+        "Routes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RouteOut"
+          }
+        }
+      }
+    },
+    "SubmissionResult": {
+      "description": "",
+      "type": "object",
+      "properties": {
+        "IsSuccess": {
+          "type": "boolean",
+          "example": false
+        },
+        "FeedbackMessage": {
+          "type": "string",
+          "default": ""
+        },
+        "Coaxium": {
+          "type": "integer",
+          "example": 1234,
+          "format": "int32"
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "StarDeliveryServices"
+    }
+  ]
+}

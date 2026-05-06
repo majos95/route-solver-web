@@ -4,7 +4,7 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "codegen": "swagger2openapi ../swagger.json -o .swagger-oas3.json && openapi-typescript ./.swagger-oas3.json -o ./src/api/schema.d.ts",
+    "codegen": "swagger2openapi ./swagger.json -o .swagger-oas3.json && openapi-typescript ./.swagger-oas3.json -o ./src/api/schema.d.ts",
     "postinstall": "npm run codegen",
     "predev": "npm run codegen",
     "prebuild": "npm run codegen",
