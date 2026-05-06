@@ -1,0 +1,12 @@
+node_modules/
+dist/
+
+# generated — rebuild with `npm run codegen`
+.swagger-oas3.json
+src/api/schema.d.ts
+
+# local credentials — never commit
+.env.local
+
+.DS_Store
+*.local
