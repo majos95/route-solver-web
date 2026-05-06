@@ -6,7 +6,7 @@ type RouteOut = components['schemas']['RouteOut']
 type ChallengeOut = components['schemas']['ChallengeOut']
 type PlanetSimple = components['schemas']['PlanetSimple']
 
-export function adaptPlanet(p: PlanetOut): Planet {
+export function adaptPlanet(p: Partial<PlanetOut>): Planet {
   return {
     id: p.Id ?? 0,
     name: p.Name ?? '',
