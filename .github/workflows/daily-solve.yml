@@ -1,0 +1,26 @@
+name: Daily Challenge Auto-Solver
+
+on:
+  schedule:
+    - cron: '0 0 * * *'   # 00:00 UTC — script polls until challenges appear
+  workflow_dispatch:        # allow manual trigger for testing
+
+jobs:
+  solve:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      - run: npx tsx scripts/auto-solve.ts
+        env:
+          VITE_PLAYER_GUID: ${{ secrets.VITE_PLAYER_GUID }}
+          VITE_PLAYER_EMAIL: ${{ secrets.VITE_PLAYER_EMAIL }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}

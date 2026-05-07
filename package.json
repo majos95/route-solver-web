@@ -10,7 +10,8 @@
     "prebuild": "npm run codegen",
     "dev": "vite",
     "build": "tsc && vite build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "solve:dry": "DRY_RUN=true tsx scripts/auto-solve.ts"
   },
   "dependencies": {
     "openapi-fetch": "^0.13.0",
@@ -18,11 +19,13 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@types/node": "^25.6.0",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "openapi-typescript": "^7.13.0",
     "swagger2openapi": "^7.0.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.5.3",
     "vite": "^7.0.0",
     "vitest": "^4.1.5"
