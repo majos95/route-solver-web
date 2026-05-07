@@ -1,16 +1,8 @@
 import type { SolveInput, SolveResult, Planet, Bonus } from './types'
-import { buildRouteSets, edgeCost } from './edgeCost'
+import { buildRouteSets } from './edgeCost'
 import { yenKsp, type KspPath } from './yenKsp'
 
-const DEFAULT_K = 50
-
-// Fewer paths per segment when there are many stops — the DFS branches at K^segments
-function effectiveK(keyNodeCount: number, requestedK: number): number {
-  if (keyNodeCount <= 4) return requestedK
-  if (keyNodeCount <= 6) return Math.min(requestedK, 25)
-  if (keyNodeCount <= 8) return Math.min(requestedK, 15)
-  return Math.min(requestedK, 10)
-}
+const DEFAULT_K = 1
 
 function permutations(arr: number[]): number[][] {
   if (arr.length <= 1) return [arr.slice()]
@@ -69,7 +61,7 @@ export function disjointTsp(input: SolveInput, requestedK = DEFAULT_K): SolveRes
   // Precompute KSP for ALL potential key nodes once, before the bonus-subset loop.
   // Recomputing per-subset would multiply work by 2^|bonuses|.
   const allKeyNodeIds = [startPlanetId, ...mandatoryUnique, ...validBonuses.map((b) => b.planetId)]
-  const K = effectiveK(mandatoryUnique.length + 1, requestedK)
+  const K = requestedK
   const kspCache = new Map<string, KspPath[]>()
 
   for (const s of allKeyNodeIds) {
@@ -78,26 +70,6 @@ export function disjointTsp(input: SolveInput, requestedK = DEFAULT_K): SolveRes
       const key = `${s}-${t}`
       if (kspCache.has(key)) continue
       kspCache.set(key, yenKsp(s, t, K, allNodeIds, forbiddenSet, mainSet, otherSet, byId))
-    }
-  }
-
-  // Guarantee a direct (zero-intermediate) path exists for every key-node pair.
-  // Yen's KSP returns paths sorted by cost, so a route-discounted multi-hop may appear
-  // before the direct edge, pushing the direct path beyond position K. A direct path has
-  // no intermediates, so it always satisfies the disjoint constraint — it's the fallback
-  // that ensures the DFS can always complete a tour even for isolated or poorly-connected
-  // mandatory planets.
-  for (const s of allKeyNodeIds) {
-    for (const t of allKeyNodeIds) {
-      if (s === t) continue
-      const key = `${s}-${t}`
-      const paths = kspCache.get(key) ?? []
-      if (!paths.some((p) => p.path.length === 2)) {
-        const sNode = byId.get(s)!
-        const tNode = byId.get(t)!
-        paths.push({ cost: edgeCost(sNode, tNode, mainSet, otherSet), path: [s, t] })
-        kspCache.set(key, paths)
-      }
     }
   }
 
@@ -144,7 +116,7 @@ export function disjointTsp(input: SolveInput, requestedK = DEFAULT_K): SolveRes
     }
   }
 
-  if (!best.route) return fail('No valid disjoint route found — try increasing K')
+  if (!best.route) return fail('No valid route found')
 
   return {
     success: true,
@@ -180,14 +152,10 @@ function dfsDisjoint(
   for (const { cost, path } of segKsps[idx]) {
     if (costSoFar + cost - bonusCredit >= best.effectiveFuel) break
 
-    const intermediates = path.slice(1, -1)
-    if (intermediates.some((n) => visited.has(n))) continue
-
     const target = path[path.length - 1]
     if (!isLastSegment && visited.has(target)) continue
 
     const newVisited = new Set(visited)
-    for (const n of intermediates) newVisited.add(n)
     if (!isLastSegment) newVisited.add(target)
 
     dfsDisjoint(
