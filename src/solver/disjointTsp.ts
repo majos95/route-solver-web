@@ -194,14 +194,14 @@ function dfsDisjoint(
   for (const { cost, path } of segKsps[idx]) {
     if (costSoFar + cost - bonusCredit >= best.effectiveFuel) break
 
-    const intermediates = path.slice(1, -1)
-    if (intermediates.some((n) => visited.has(n))) continue
-
+    // Only track planned stops (mandatory/bonus endpoints) in visited —
+    // ordinary transit nodes may appear in multiple segments. The game API
+    // enforces forbidden-planet avoidance and mandatory-planet visitation
+    // but does not reject routes for revisiting transit hops.
     const target = path[path.length - 1]
     if (!isLastSegment && visited.has(target)) continue
 
     const newVisited = new Set(visited)
-    for (const n of intermediates) newVisited.add(n)
     if (!isLastSegment) newVisited.add(target)
 
     dfsDisjoint(

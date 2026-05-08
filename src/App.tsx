@@ -4,6 +4,7 @@ import { useChallenges } from './state/useChallenges'
 import type { ChallengeOut } from './state/useChallenges'
 import { ChallengeList } from './ui/ChallengeList'
 import { SolutionView } from './ui/SolutionView'
+import { AutoSolvePanel } from './ui/AutoSolvePanel'
 import { Spinner } from './ui/components/Spinner'
 import { RawJson } from './ui/components/RawJson'
 import { adaptChallenge } from './solver/adapters'
@@ -12,6 +13,34 @@ import './App.css'
 
 const REQUIRED_VARS = ['VITE_PLAYER_GUID', 'VITE_PLAYER_EMAIL', 'VITE_API_BASE_URL'] as const
 const missing = REQUIRED_VARS.filter((k) => !import.meta.env[k])
+
+const AUTH_KEY = 'routesolver:auth'
+const PASSWORD = 'KGBitch'
+
+function PasswordGate({ onAuth }: { onAuth: () => void }) {
+  const [pw, setPw] = useState('')
+  const [err, setErr] = useState(false)
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (pw === PASSWORD) { onAuth() } else { setErr(true); setPw('') }
+  }
+  return (
+    <div className="password-gate">
+      <h1>RouteSolver</h1>
+      <form className="password-form" onSubmit={handleSubmit}>
+        <input
+          type="password"
+          placeholder="Password"
+          value={pw}
+          onChange={(e) => { setPw(e.target.value); setErr(false) }}
+          autoFocus
+        />
+        <button type="submit" className="btn-primary">Enter</button>
+      </form>
+      {err && <p className="password-error">Wrong password</p>}
+    </div>
+  )
+}
 
 export default function App() {
   if (missing.length > 0) {
@@ -23,6 +52,14 @@ export default function App() {
         <p>See <code>.env.example</code> for the template.</p>
       </div>
     )
+  }
+  return <GatedApp />
+}
+
+function GatedApp() {
+  const [authed, setAuthed] = useState(() => localStorage.getItem(AUTH_KEY) === '1')
+  if (!authed) {
+    return <PasswordGate onAuth={() => { localStorage.setItem(AUTH_KEY, '1'); setAuthed(true) }} />
   }
   return <AppInner />
 }
@@ -44,6 +81,7 @@ function AppInner() {
   const [solution, setSolution] = useState<SolutionState | null>(null)
   const [solveError, setSolveError] = useState<string | null>(null)
   const [elapsedMs, setElapsedMs] = useState(0)
+  const [autoSolving, setAutoSolving] = useState(false)
 
   const workerRef = useRef<Worker | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -103,6 +141,19 @@ function AppInner() {
     setSolveError('Cancelled after ' + fmt(elapsedMs))
   }, [elapsedMs])
 
+  if (autoSolving && gameMap && challenges) {
+    return (
+      <div className="app">
+        <AutoSolvePanel
+          challenges={challenges}
+          planets={gameMap.planets}
+          routes={gameMap.routes}
+          onBack={() => setAutoSolving(false)}
+        />
+      </div>
+    )
+  }
+
   if (solution) {
     return (
       <div className="app">
@@ -152,11 +203,22 @@ function AppInner() {
           )}
 
           {challenges && (
-            <ChallengeList
-              challenges={challenges}
-              onSolve={handleSolve}
-              solvingId={solvingId}
-            />
+            <>
+              <div className="auto-solve-bar">
+                <button
+                  className="btn-primary"
+                  onClick={() => { setSolution(null); setAutoSolving(true) }}
+                  disabled={solvingId !== null}
+                >
+                  Auto-Solve All
+                </button>
+              </div>
+              <ChallengeList
+                challenges={challenges}
+                onSolve={handleSolve}
+                solvingId={solvingId}
+              />
+            </>
           )}
         </>
       )}

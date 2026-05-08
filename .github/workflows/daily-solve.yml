@@ -1,9 +1,7 @@
 name: Daily Challenge Auto-Solver
 
 on:
-  schedule:
-    - cron: '0 0 * * *'   # 00:00 UTC — script polls until challenges appear
-  workflow_dispatch:        # allow manual trigger for testing
+  workflow_dispatch:        # manual trigger only — use the UI button or run locally
 
 jobs:
   solve:

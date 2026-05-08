@@ -252,3 +252,95 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   padding-top: 16px;
   border-top: 1px solid #1e293b;
 }
+
+/* Password gate */
+.password-gate {
+  max-width: 320px;
+  margin: 120px auto;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.password-gate h1 { font-size: 22px; font-weight: 700; }
+.password-form {
+  display: flex;
+  gap: 8px;
+}
+.password-form input {
+  flex: 1;
+  background: #1e2330;
+  border: 1px solid #334155;
+  border-radius: 5px;
+  padding: 7px 12px;
+  color: #e2e8f0;
+  font-size: 13px;
+  outline: none;
+}
+.password-form input:focus { border-color: #3b82f6; }
+.password-error { font-size: 13px; color: #fca5a5; }
+
+/* Auto-solve bar */
+.auto-solve-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+/* Auto-solve panel */
+.auto-solve-panel { display: flex; flex-direction: column; gap: 16px; }
+.auto-solve-panel h2 { font-size: 18px; font-weight: 600; }
+
+.auto-solve-entries { display: flex; flex-direction: column; gap: 10px; }
+
+.auto-solve-entry {
+  background: #1e2330;
+  border: 1px solid #2d3748;
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.auto-solve-entry.as-status-done  { border-color: #14532d; }
+.auto-solve-entry.as-status-failed { border-color: #7f1d1d; }
+
+.auto-solve-entry-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.auto-solve-name { font-weight: 600; font-size: 15px; }
+.auto-solve-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+.as-queued { color: #475569; }
+.as-done   { color: #86efac; }
+.as-failed { color: #fca5a5; }
+
+.auto-solve-result { display: flex; flex-direction: column; gap: 8px; }
+.as-fuel { font-size: 13px; color: #94a3b8; }
+.as-fuel strong { color: #e2e8f0; font-size: 20px; }
+.as-detail { font-size: 12px; color: #475569; }
+.as-error  { font-size: 12px; color: #fca5a5; }
+
+.as-submit-status {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 5px;
+}
+.as-submit-submitting { color: #94a3b8; display: flex; align-items: center; gap: 6px; }
+.as-submit-done   { background: #0d2b1a; border: 1px solid #14532d; color: #86efac; }
+.as-submit-failed { background: #3b1a1a; border: 1px solid #7f1d1d; color: #fca5a5; }
+
+.auto-solve-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 4px;
+}
