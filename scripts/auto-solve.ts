@@ -156,7 +156,11 @@ async function main() {
     if (!result.success) {
       throw new Error(`Solver failed for "${challenge.ChallengeName}": ${result.errorMessage}`)
     }
-    console.log(`  [${level}] "${challenge.ChallengeName}" → effectiveFuel=${result.effectiveFuel} (${ms}ms)`)
+    if (result.timedOut) {
+      console.warn(`  [${level}] "${challenge.ChallengeName}" → TIMED OUT — submitting best-so-far: effectiveFuel=${result.effectiveFuel} (${ms}ms)`)
+    } else {
+      console.log(`  [${level}] "${challenge.ChallengeName}" → effectiveFuel=${result.effectiveFuel} (${ms}ms)`)
+    }
     return { challenge, result, level }
   })
   const totalSolveMs = (performance.now() - solveStart).toFixed(0)

@@ -72,5 +72,14 @@ export function yenKsp(
     A.push(B.shift()!)
   }
 
+  // The direct hop [source, target] has no intermediates so it can never
+  // conflict with visited sets in dfsDisjoint. Append it as a guaranteed
+  // fallback if Yen's K paths didn't already include it.
+  const directKey = `${source},${target}`
+  if (!seen.has(directKey)) {
+    const directCost = edgeCost(coords.get(source)!, coords.get(target)!, mainSet, otherSet)
+    A.push({ cost: directCost, path: [source, target] })
+  }
+
   return A
 }

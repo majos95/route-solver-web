@@ -2,7 +2,16 @@ import type { SolveInput, SolveResult, Planet, Bonus } from './types'
 import { buildRouteSets } from './edgeCost'
 import { yenKsp, type KspPath } from './yenKsp'
 
-const DEFAULT_K = 1
+const DEFAULT_K = 0       // 0 = auto: complexity-adaptive K selection
+const TIMEOUT_MS = 30_000 // return best-so-far after 30 s
+
+function adaptiveK(mandatoryCount: number, bonusCount: number): number {
+  const stops = mandatoryCount + bonusCount
+  if (stops <= 1) return 3
+  if (stops <= 3) return 10
+  if (stops <= 5) return 12
+  return 15
+}
 
 function permutations(arr: number[]): number[][] {
   if (arr.length <= 1) return [arr.slice()]
@@ -28,6 +37,7 @@ interface Best {
   route: Planet[] | null
   gross: number
   collected: number
+  timedOut: boolean
 }
 
 export function disjointTsp(input: SolveInput, requestedK = DEFAULT_K): SolveResult {
@@ -61,7 +71,7 @@ export function disjointTsp(input: SolveInput, requestedK = DEFAULT_K): SolveRes
   // Precompute KSP for ALL potential key nodes once, before the bonus-subset loop.
   // Recomputing per-subset would multiply work by 2^|bonuses|.
   const allKeyNodeIds = [startPlanetId, ...mandatoryUnique, ...validBonuses.map((b) => b.planetId)]
-  const K = requestedK
+  const K = requestedK === DEFAULT_K ? adaptiveK(mandatoryUnique.length, validBonuses.length) : requestedK
   const kspCache = new Map<string, KspPath[]>()
 
   for (const s of allKeyNodeIds) {
@@ -84,9 +94,17 @@ export function disjointTsp(input: SolveInput, requestedK = DEFAULT_K): SolveRes
     }
   }
 
-  const best: Best = { effectiveFuel: Infinity, route: null, gross: 0, collected: 0 }
+  const best: Best = { effectiveFuel: Infinity, route: null, gross: 0, collected: 0, timedOut: false }
+  const deadline = Date.now() + TIMEOUT_MS
 
-  for (const bonusSubset of powerset(validBonuses)) {
+  // Sort subsets highest-value first so branch-and-bound gets a tight upper
+  // bound early and prunes low-value subsets aggressively.
+  const sortedSubsets = powerset(validBonuses).sort(
+    (a, b) => b.reduce((s, x) => s + x.value, 0) - a.reduce((s, x) => s + x.value, 0),
+  )
+
+  for (const bonusSubset of sortedSubsets) {
+    if (best.timedOut) break
     const bonusCredit = bonusSubset.reduce((s, b) => s + b.value, 0)
     const bonusPlanetIds = bonusSubset.map((b) => b.planetId)
     const forcedStops = [...new Set([...mandatoryUnique, ...bonusPlanetIds])]
@@ -101,7 +119,11 @@ export function disjointTsp(input: SolveInput, requestedK = DEFAULT_K): SolveRes
       continue
     }
 
-    for (const perm of permutations(forcedStops)) {
+    // Build segment-KSP arrays for every permutation up front, compute each
+    // permutation's lower bound (sum of cheapest first-path costs), then sort
+    // ascending. This lets us break as soon as lb - bonusCredit >= best rather
+    // than continuing to iterate permutations that can't possibly improve it.
+    const orderedPerms = permutations(forcedStops).map((perm) => {
       const segKsps: KspPath[][] = []
       let prev = startPlanetId
       for (const stop of perm) {
@@ -109,14 +131,31 @@ export function disjointTsp(input: SolveInput, requestedK = DEFAULT_K): SolveRes
         prev = stop
       }
       segKsps.push(kspCache.get(`${prev}-${startPlanetId}`) ?? [])
+      const lb = segKsps.reduce((s, paths) => s + (paths[0]?.cost ?? Infinity), 0)
+      return { segKsps, lb }
+    })
+    orderedPerms.sort((a, b) => a.lb - b.lb)
 
+    for (const { segKsps, lb } of orderedPerms) {
+      if (best.timedOut) break
       if (segKsps.some((s) => s.length === 0)) continue
+      if (lb - bonusCredit >= best.effectiveFuel) break  // sorted — all remaining worse
 
-      dfsDisjoint(segKsps, 0, new Set([startPlanetId]), 0, [start], bonusCredit, best, byId)
+      dfsDisjoint(segKsps, 0, new Set([startPlanetId]), 0, [start], bonusCredit, best, byId, deadline)
     }
   }
 
   if (!best.route) return fail('No valid route found')
+
+  // Credit bonus planets that were visited as route intermediates but weren't
+  // planned forced stops — the DFS picks cheapest paths regardless of bonuses,
+  // so a bonus planet may appear in the route "for free".
+  const routeIds = new Set(best.route.map((p) => p.id))
+  const actualBonus = validBonuses.filter((b) => routeIds.has(b.planetId)).reduce((s, b) => s + b.value, 0)
+  if (actualBonus > best.collected) {
+    best.collected = actualBonus
+    best.effectiveFuel = best.gross - actualBonus
+  }
 
   return {
     success: true,
@@ -124,6 +163,7 @@ export function disjointTsp(input: SolveInput, requestedK = DEFAULT_K): SolveRes
     effectiveFuel: best.effectiveFuel,
     grossFuel: best.gross,
     collectedBonus: best.collected,
+    timedOut: best.timedOut || undefined,
   }
 }
 
@@ -136,7 +176,9 @@ function dfsDisjoint(
   bonusCredit: number,
   best: Best,
   byId: Map<number, Planet>,
+  deadline: number,
 ): void {
+  if (Date.now() >= deadline) { best.timedOut = true; return }
   if (costSoFar - bonusCredit >= best.effectiveFuel) return
 
   if (idx === segKsps.length) {
@@ -152,10 +194,14 @@ function dfsDisjoint(
   for (const { cost, path } of segKsps[idx]) {
     if (costSoFar + cost - bonusCredit >= best.effectiveFuel) break
 
+    const intermediates = path.slice(1, -1)
+    if (intermediates.some((n) => visited.has(n))) continue
+
     const target = path[path.length - 1]
     if (!isLastSegment && visited.has(target)) continue
 
     const newVisited = new Set(visited)
+    for (const n of intermediates) newVisited.add(n)
     if (!isLastSegment) newVisited.add(target)
 
     dfsDisjoint(
@@ -167,6 +213,7 @@ function dfsDisjoint(
       bonusCredit,
       best,
       byId,
+      deadline,
     )
   }
 }

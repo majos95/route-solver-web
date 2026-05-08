@@ -32,4 +32,5 @@ export interface SolveResult {
   effectiveFuel: number
   grossFuel: number
   collectedBonus: number
+  timedOut?: boolean
 }
