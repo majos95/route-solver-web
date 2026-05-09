@@ -1,4 +1,4 @@
-import type { SolveInput, SolveResult, Planet } from './types'
+import type { SolveInput, SolveResult } from './types'
 import type { CostMatrix } from './costMatrix'
 import type { AllPairsSP } from './allPairsSP'
 import { buildCostMatrix } from './costMatrix'
