@@ -1,6 +1,6 @@
 import type { SolveInput, SolveResult } from './types'
-import { disjointTsp } from './disjointTsp'
+import { heldKarpSolve } from './heldKarpSolve'
 
 export function solve(input: SolveInput): SolveResult {
-  return disjointTsp(input)
+  return heldKarpSolve(input)
 }
