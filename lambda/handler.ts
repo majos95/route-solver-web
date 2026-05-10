@@ -120,12 +120,14 @@ async function submitWithRetry(
 }
 
 export const handler = async (): Promise<void> => {
+  // Start fetching map data immediately — it's ready by the time the poll completes.
+  const mapDataPromise = apiGet<MapData>('/GetPlanetsAndRoutes')
   await pollUntilChallengesAvailable()
 
   console.log('Fetching challenges and map data...')
   const [allChallenges, mapData] = await Promise.all([
     apiGet<ChallengeOut[]>('/GetDailyChallenge'),
-    apiGet<MapData>('/GetPlanetsAndRoutes'),
+    mapDataPromise,
   ])
 
   const planets = (mapData.Planets ?? []).map(adaptPlanet)

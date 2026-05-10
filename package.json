@@ -12,7 +12,7 @@
     "build": "tsc && vite build",
     "test": "vitest run",
     "solve:dry": "DRY_RUN=true tsx scripts/auto-solve.ts",
-    "build:lambda": "esbuild lambda/handler.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/lambda/handler.js && echo '{\"type\":\"commonjs\"}' > dist/lambda/package.json"
+    "build:lambda": "esbuild lambda/handler.ts lambda/handler-dry-run.ts --bundle --platform=node --target=node20 --format=cjs --outdir=dist/lambda && echo '{\"type\":\"commonjs\"}' > dist/lambda/package.json"
   },
   "dependencies": {
     "openapi-fetch": "^0.13.0",

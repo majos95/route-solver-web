@@ -47,3 +47,20 @@ Resources:
     Properties:
       LogGroupName: !Sub /aws/lambda/${AutoSolverFunction}
       RetentionInDays: 30
+
+  # Dry-run function — invoke manually from the console or CLI.
+  # Fetches current challenges, solves them, logs routes, but does NOT submit.
+  # Returns a structured JSON summary visible in the Lambda test output.
+  DryRunFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: route-solver-dry-run
+      CodeUri: dist/lambda/
+      Handler: handler-dry-run.handler
+      Description: Dry-run solver — verifies API connectivity and solver correctness without submitting
+
+  DryRunLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${DryRunFunction}
+      RetentionInDays: 30
