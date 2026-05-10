@@ -4,11 +4,9 @@ export function euclidean(a: Planet, b: Planet): number {
   return Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2)
 }
 
-// Canonical undirected key: smaller ID first.
-// If the oracle consistently disagrees with the solver, check route directionality first —
-// the game may treat some routes as one-way despite appearing bidirectional here.
-export function routeKey(aId: number, bId: number): string {
-  return `${Math.min(aId, bId)}-${Math.max(aId, bId)}`
+// Canonical undirected key: smaller ID first. Routes are bidirectional discounts.
+export function routeKey(fromId: number, toId: number): string {
+  return `${Math.min(fromId, toId)}-${Math.max(fromId, toId)}`
 }
 
 export function buildRouteSets(routes: Route[]): {
@@ -31,7 +29,7 @@ export function edgeCost(
   mainSet: Set<string>,
   otherSet: Set<string>,
 ): number {
-  // Every planet pair has an implicit full-cost edge; routes are discounts, not prerequisites.
+  // Every planet pair has an implicit full-cost edge; routes are directed discounts.
   const d = euclidean(a, b)
   const key = routeKey(a.id, b.id)
   if (mainSet.has(key)) return 0.5 * d

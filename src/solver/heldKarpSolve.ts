@@ -60,6 +60,9 @@ function realizeOrdering(
   const segPaths: number[][] = []
   let gross = 0
 
+  // All dense indices that are forced stops (endpoints in the ordering), for conflict detection.
+  const allForcedDense = new Set(forcedIdxs)
+
   for (let i = 0; i < ordering.length - 1; i++) {
     const srcDense = forcedIdxs[ordering[i]]
     const dstDense = forcedIdxs[ordering[i + 1]]
@@ -73,14 +76,17 @@ function realizeOrdering(
 
     if (path === null) return null  // no precomputed path at all (unreachable)
 
-    // Forward-sweep conflict check: any intermediate node already visited?
-    const hasConflict = path.slice(1, -1).some(v => visitedDense.has(v))
+    // Forward-sweep conflict check: any intermediate node is either already visited OR
+    // is a future forced stop (would create a revisit when that stop is processed later).
+    const intermediates = path.slice(1, -1)
+    const hasConflict = intermediates.some(v => visitedDense.has(v) || allForcedDense.has(v))
 
     if (hasConflict) {
-      // Re-run Dijkstra with all currently-visited nodes forbidden.
-      // Exclude dstDense from additionalForbidden so the target remains reachable
-      // (relevant for the last segment, where dstDense = startDense ∈ visitedDense).
+      // Re-run Dijkstra forbidding visited nodes AND all forced stops (except dstDense).
+      // Forbidding future forced stops prevents them from being transited prematurely.
+      // Excluding dstDense keeps the target reachable.
       const addForbidden = new Set(visitedDense)
+      for (const f of allForcedDense) addForbidden.add(f)
       addForbidden.delete(dstDense)
       const repaired = repairDijkstra(matrix, srcDense, dstDense, baseForbidden, addForbidden)
       if (repaired === null) return null

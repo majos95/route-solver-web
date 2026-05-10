@@ -10,10 +10,15 @@ interface HkEntry {
 // n        = number of forced stops (index 0 = start)
 // costs    = flat n×n matrix; costs[i*n + j] = spCost from forcedStop[i] to forcedStop[j]
 //
-// Yields full orderings in non-decreasing lower-bound cost.
+// Yields ALL complete orderings in non-decreasing lower-bound cost.
 // Each ordering is a complete tour: [0, ...middle, 0] where middle is a permutation of 1..n-1.
 // Stops emitting once the priority queue is exhausted.
 // The caller is responsible for the B&B cutoff (stop pulling when next cost ≥ best).
+//
+// No bestReach pruning is used: every distinct ordered prefix is explored so that
+// the caller sees all orderings, not just the HK-DP-optimal one per (mask, last) pair.
+// This is necessary because realized costs (after forward-sweep repair) can exceed the
+// lower bound, so the cheapest-lb ordering per state is not always the best realized one.
 export function* heldKarpGen(
   n: number,
   costs: Float64Array,
@@ -23,14 +28,8 @@ export function* heldKarpGen(
     return
   }
 
-  const stateCount = n * (1 << n)
-  const bestReach = new Float64Array(stateCount).fill(Infinity)
-  // bestReach[mask * n + last] = cheapest cost to reach state (mask, last)
-
   const pq = new MinHeap<HkEntry>()
-  const init: HkEntry = { cost: 0, mask: 1, last: 0, path: [0] }
-  pq.push(0, init)
-  bestReach[/* mask=1 */ 1 * n + 0] = 0
+  pq.push(0, { cost: 0, mask: 1, last: 0, path: [0] })
 
   const fullMask = (1 << n) - 1
 
@@ -38,13 +37,8 @@ export function* heldKarpGen(
     const [, entry] = pq.pop()!
     const { cost, mask, last, path } = entry
 
-    // Stale entry: a cheaper path to (mask, last) was already processed.
-    if (cost > bestReach[mask * n + last]) continue
-
     if (mask === fullMask) {
-      // All forced stops visited — close the tour back to start.
-      const returnCost = costs[last * n + 0]
-      yield { ordering: [...path, 0], cost: cost + returnCost }
+      yield { ordering: [...path, 0], cost }
       continue
     }
 
@@ -52,10 +46,13 @@ export function* heldKarpGen(
       if (mask & (1 << v)) continue  // already visited
       const newMask = mask | (1 << v)
       const newCost = cost + costs[last * n + v]
-      const stateIdx = newMask * n + v
-      if (newCost >= bestReach[stateIdx]) continue
-      bestReach[stateIdx] = newCost
-      pq.push(newCost, { cost: newCost, mask: newMask, last: v, path: [...path, v] })
+
+      if (newMask === fullMask) {
+        const totalCost = newCost + costs[v * n + 0]
+        pq.push(totalCost, { cost: totalCost, mask: newMask, last: v, path: [...path, v] })
+      } else {
+        pq.push(newCost, { cost: newCost, mask: newMask, last: v, path: [...path, v] })
+      }
     }
   }
 }

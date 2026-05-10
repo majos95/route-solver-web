@@ -32,7 +32,7 @@ describe('buildCostMatrix', () => {
     const routes: Route[] = [{ from: 1, to: 2, type: 'main' }]
     const { data } = buildCostMatrix(planets, routes)
     expect(data[0 * 2 + 1]).toBeCloseTo(5)   // 0.5 * 10
-    expect(data[1 * 2 + 0]).toBeCloseTo(5)
+    expect(data[1 * 2 + 0]).toBeCloseTo(5)   // bidirectional discount
   })
 
   it('applies other route 2/3× discount', () => {
@@ -382,15 +382,18 @@ describe('T6 — bonus exclusion', () => {
 })
 
 describe('T7 — route discounts', () => {
-  it('applies main route ×0.5 discount', () => {
-    const input: SolveInput = { ...baseInput({ mandatoryIds: [2] }), routes: [{ from: 1, to: 2, type: 'main' }] }
+  it('applies main route ×0.5 discount (both legs explicitly routed)', () => {
+    // Routes are directed: add both directions so the round trip is discounted.
+    const routes: Route[] = [{ from: 1, to: 2, type: 'main' }, { from: 2, to: 1, type: 'main' }]
+    const input: SolveInput = { ...baseInput({ mandatoryIds: [2] }), routes }
     const r = solve(input)
     expect(r.success).toBe(true)
     expect(near(r.grossFuel, 10)).toBe(true)
   })
 
-  it('applies other route ×(2/3) discount', () => {
-    const input: SolveInput = { ...baseInput({ mandatoryIds: [2] }), routes: [{ from: 1, to: 2, type: 'other' }] }
+  it('applies other route ×(2/3) discount (both legs explicitly routed)', () => {
+    const routes: Route[] = [{ from: 1, to: 2, type: 'other' }, { from: 2, to: 1, type: 'other' }]
+    const input: SolveInput = { ...baseInput({ mandatoryIds: [2] }), routes }
     const r = solve(input)
     expect(r.success).toBe(true)
     expect(near(r.grossFuel, 2 * 10 * (2 / 3))).toBe(true)
