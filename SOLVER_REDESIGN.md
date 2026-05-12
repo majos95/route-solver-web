@@ -1,85 +1,217 @@
 ---
 
-Rewrite `src/solver/` from scratch. Leave the rest of the project alone (deploy, API, UI, codegen, tests scaffolding are fine).
+# Route Solver — Design Reference
 
-**Explicit departure from the previous design: Yen's K-shortest paths is gone.** The previous solver used Yen's to handle the global no-revisit constraint by generating alternative segment paths. This was expensive (K Dijkstras per pair, K unbounded) and it was patching over a decomposition that doesn't fit the problem. Do not port any Yen's code, lazy generator, or KSP-cache infrastructure into the new solver. The new design replaces all of it with Held-Karp's natural ordering enumeration plus a forward-sweep repair step.
+## The problem
 
-**The problem.** Generalized Prize-Collecting TSP with Forbidden Vertices and Discounted Edges. Single objective:
+Generalized Prize-Collecting TSP with Forbidden Vertices and Discounted Edges. Single objective:
 
 ```
 minimize: Σ(edge_costs_traveled) − Σ(bonus_values_collected)
 ```
 
-Tour starts and ends at the start node, visits every mandatory exactly once, never enters a forbidden node, no node visited twice (except start/end), includes a bonus iff it lowers the objective.
+Tour starts and ends at the start node, visits every mandatory exactly once, never enters a forbidden node, no node visited twice (except start/end), includes a bonus planet iff it lowers the objective.
 
-**Constraint:** the leaderboard rewards exactness *and* speed. Provably-optimal solutions only — every constant-factor win matters.
-
-**Crucial property of the network:** it is logically complete. Every star pair has an edge at full Euclidean cost. Routes are *discounts on edges that already exist* (main = ×0.5, other = ×2/3), not prerequisites. Mandatory stars are always reachable unless explicitly forbidden.
-
-**Node roles:**
-- Start: boundary condition.
-- Mandatory: hard constraints.
-- Forbidden: removed from the search graph at solver entry.
-- Bonus: optional with negative effective cost. Filter *dominated* bonuses (cheapest detour cost > value) before subset enumeration.
-
-**The new algorithm.**
-
-1. **Cost matrix precomputation (`costMatrix.ts`).** At solver entry, build a flat `N×N` `Float64Array` of direct edge costs (`edgeCost`), indexed by dense 0-based node indices mapped from sparse planet IDs via `idToIdx`/`idxToId`. All downstream layers index this array — no map lookups in hot paths.
-
-2. **All-pairs shortest paths from forced-stop nodes (`allPairsSP.ts`).** One Dijkstra per node in `{start, ...mandatories, ...bonuses}`, using the cost matrix. Stores both `spCost` (a `Float64Array` of costs) and `spPath` (an array of dense-index paths), keyed by source dense index. This is the *only* path-finding work the solver does upfront. Forbidden nodes are excluded from the Dijkstra neighbor loop.
-
-3. **Dominated bonus filtering.** For each bonus, compute the cheapest possible detour using the all-pairs results. If detour cost > bonus value, drop it from consideration before enumeration.
-
-4. **Bonus subset enumeration.** For each subset of surviving bonuses, treat them as additional mandatories. Compute `bonusCredit = sum of values`. Sort subsets by descending total bonus value so high-credit subsets are tried first. Pass to the Held-Karp solver below.
-
-5. **Held-Karp DP yielding orderings in ascending lower-bound cost (`heldKarp.ts`).** State: `(visited_subset_bitmask, last_node_index)` where indices are into the forced-stops array for the current subset (index 0 = start). A min-heap priority queue drives a branch-and-bound search over partial orderings. `bestReach[mask * n + last]` tracks the cheapest cost to each state; stale heap entries are skipped on pop. A partial state is extended by pushing one entry per unvisited forced stop. **A state yields a complete ordering only when `mask === fullMask`** (all forced stops visited) — at that point the return-to-start cost is added and the full ordering is yielded. This guarantees orderings are emitted in non-decreasing lower-bound cost order. Each yielded ordering's lower-bound effective cost = (sum of `spCost` values along the ordering) − `bonusCredit`.
-
-6. **Realization with forward-sweep repair (`heldKarpSolve.ts`).** For each ordering yielded by Held-Karp:
-    - Maintain a `visitedDense` set initialised with the start node's dense index.
-    - Process segments in order. For each segment `srcDense → dstDense`:
-      - **Early rejection:** if `dstDense` is already in `visitedDense` (a future forced stop was transited by an earlier repair), discard the ordering immediately.
-      - Retrieve the precomputed `spPath` for this segment.
-      - **Conflict check:** if any *intermediate* node (i.e. `path.slice(1, -1)`) is in `visitedDense`, run one repair Dijkstra with `additionalForbidden = visitedDense \ {dstDense}`. Excluding `dstDense` ensures the last segment can always return to start (start is in `visitedDense` from initialisation). If repair fails, discard the ordering.
-      - Add all nodes in the segment path (except the source) to `visitedDense`.
-    - **Final no-revisit check:** after all segments are realized, scan the full concatenated route and reject if any non-start node appears more than once. This catches the edge case where a repair path transited through a future forced stop.
-    - **If no conflict:** compute `gross` (sum of all segment costs) and `collected` (sum of `bonusValueByDense` for every dense index in the route — includes transit bonuses from all valid bonuses, not just the current subset). Compute `effective = gross − collected`. Update `best` if lower.
-    - **Branch-and-bound across orderings:** as soon as the next ordering's lower bound − `bonusCredit` ≥ `best.effectiveFuel`, stop iterating — no further ordering in this subset can improve `best`.
-
-7. **5-minute wall-clock timeout** checked at the entry of every Held-Karp pop and every realization attempt. On timeout: `best.timedOut = true`, return best route found. If no route was found before timeout, return `success: false`.
-
-**Why this is exact:**
-- Held-Karp orderings are emitted in non-decreasing lower-bound cost order. The lower bound is a true lower bound on any realization of that ordering (since unconstrained `spCost` values ≤ realized segment costs). When the next lower bound − `bonusCredit` ≥ `best.effectiveFuel`, no further ordering can beat best.
-- Forward-sweep repair preserves exactness: for the globally optimal tour T\*, its induced ordering O\* has segments that are node-disjoint by construction. The forward sweep processes each segment with a growing forbidden set, and for each conflicting segment, the repair Dijkstra finds the cheapest path avoiding previously-used nodes. Since T\*'s actual segments are feasible solutions for each repair sub-problem, the repaired tour costs ≤ cost(T\*). Since T\* is optimal, repaired cost = cost(T\*).
-- If repair fails or produces a revisit (the final check), we discard and move on. Held-Karp will eventually emit any ordering whose lower bound is below best, so no valid optimal tour is permanently missed.
-
-**Subtleties:**
-- Concatenating segments: drop the shared endpoint with `path.slice(1)`.
-- Last segment ends at start, which is allowed to appear twice; excluded from the intermediate conflict check via `path.slice(1, -1)`, and excluded from `additionalForbidden` during repair via `visitedDense \ {dstDense}`.
-- Transit bonuses: `bonusValueByDense` contains ALL valid bonuses. A bonus planet that appears as a transit node in any segment is credited automatically, even if it was not included in the current bonus subset.
-- The `spCost`/`spPath` cache is computed once globally and reused across all bonus subsets, since forbidden nodes don't change between subsets.
-- For `n = 1` forced stops (empty bonus subset with no mandatories): `heldKarpGen` yields the trivial `[0, 0]` ordering; the solver handles this as `effective = −bonusCredit`, `gross = 0`.
-
-**Edge cases that must be handled:**
-- Empty mandatory + no bonuses → `[start, start]`, fuel 0, success.
-- Mandatory contains start → dedupe, no-op.
-- Mandatory ∩ forbidden non-empty → success: false with descriptive error.
-- Start forbidden, start not in planet list, mandatory not in planet list → success: false.
-- Mandatory pairwise unreachable → fail-fast before enumeration → success: false.
-- Bonus not in planet list, bonus value ≤ 0, bonus is forbidden → ignore that bonus, don't fail.
-- Timeout with no valid route found → success: false.
-- Timeout with at least one valid route found → return best, `timedOut: true`.
-
-**Acceptance tests T1–T13 must all pass.**
-- T1–T10, T12: correctness and edge-case tests in `src/solver/__tests__/solver.test.ts`.
-- T11: adapter round-trip in `src/solver/__tests__/adapters.test.ts`.
-- T13: performance — day-1 challenge (3 mandatory) in < 100ms, day-3 challenge (4 mandatory + 2 bonuses) in < 2s on a typical laptop.
-
-**File map:**
-- `costMatrix.ts` — step 1: dense cost matrix + index mapping
-- `allPairsSP.ts` — step 2: all-pairs SP from forced-stop nodes
-- `heldKarp.ts` — step 5: Held-Karp DP + ordered enumeration
-- `heldKarpSolve.ts` — steps 3–7: main solver integrating all layers
-- `solve.ts` — public entry point, delegates to `heldKarpSolve`
-- `edgeCost.ts`, `heap.ts`, `types.ts`, `adapters.ts` — unchanged utilities
+The leaderboard rewards exactness and speed — provably-optimal solutions only.
 
 ---
+
+## Network properties
+
+- Every planet pair has an implicit full-cost Euclidean edge — the graph is logically complete.
+- Routes are **bidirectional discounts** on edges that already exist: `main` route = ×0.5, `other` route = ×2/3.
+- The canonical edge key is `min(id)-max(id)` (undirected). Switching to directed routes produces far worse results and is wrong.
+- Mandatory planets are always reachable unless explicitly forbidden.
+
+---
+
+## Algorithm
+
+### Step 1 — Cost matrix (`costMatrix.ts`)
+
+Build a flat `N×N` `Float64Array` of direct edge costs, indexed by dense 0-based node indices mapped from sparse planet IDs via `idToIdx`/`idxToId`. All downstream layers index this array — no map lookups in hot paths.
+
+### Step 2 — All-pairs shortest paths (`allPairsSP.ts`)
+
+One Dijkstra per node in `{start, ...mandatories, ...bonuses}`, using the cost matrix. Forbidden nodes are excluded from the neighbor loop. Stores both `spCost` (a `Float64Array` of costs) and `spPath` (an array of dense-index paths), keyed by source dense index. This is the only path-finding work done upfront. The result is reused across all bonus subsets.
+
+### Step 3 — Bonus subset enumeration (`heldKarpSolve.ts`)
+
+For each subset of valid bonuses, treat them as additional mandatory stops. Compute `bonusCredit = sum of values`. Sort subsets by descending total bonus value so high-credit subsets are tried first.
+
+### Step 4 — Held-Karp ordering enumeration (`heldKarp.ts`)
+
+State: `(visited_subset_bitmask, last_node_index)` where indices are into the forced-stops array (index 0 = start). A min-heap priority queue enumerates partial orderings in ascending cost order.
+
+**Critical design point — no `bestReach` pruning:**
+The original Held-Karp DP keeps only the cheapest path per `(mask, last)` state (`bestReach`). This is correct for standard TSP where lower bound = realized cost. It is **wrong here** because realized costs can exceed the lower bound due to forward-sweep repair. Specifically: if ordering A ends at node X with lb=3302 but needs expensive repair (realized=3495), and ordering B ends at the same node X with lb=3350 but is clean (realized=3350), the `bestReach` check would prune B entirely — making B unreachable even though it produces a better result.
+
+Fix: `bestReach` is removed. Every distinct ordered prefix is pushed to the heap and explored. The heap grows as a search tree with ≈e·(n−1)! total entries (bounded by the B&B cutoff in the caller). For n ≤ 10 forced stops this is always fast; for larger n, B&B prunes the vast majority of branches early.
+
+For full-mask states (all forced stops visited), the return-to-start cost is included in the priority so orderings are popped — and yielded — in true ascending total-cost order.
+
+### Step 5 — Realization with forward-sweep repair (`heldKarpSolve.ts`)
+
+For each ordering yielded by Held-Karp:
+
+1. Maintain `visitedDense` initialised with the start node.
+2. Maintain `allForcedDense` — the set of all forced-stop dense indices for this subset.
+3. Process segments in order. For each segment `src → dst`:
+   - **Early rejection:** if `dst` is already in `visitedDense`, discard immediately.
+   - Retrieve the precomputed `spPath` for this pair.
+   - **Conflict check:** if any intermediate node (i.e. `path.slice(1,-1)`) is in `visitedDense` OR in `allForcedDense`, run one repair Dijkstra with `additionalForbidden = visitedDense ∪ allForcedDense \ {dst}`. Forbidding future forced stops prevents them from being transited prematurely. Excluding `dst` keeps the target reachable.
+   - If repair fails, discard the ordering.
+   - Add all segment nodes (except source) to `visitedDense`.
+4. **Final no-revisit check:** scan the full concatenated route; reject if any non-start node appears more than once. This catches cases where a repair path transited a future forced stop.
+5. Compute `gross` (sum of segment costs) and `collected` (sum of `bonusValueByDense` for every node in route — transit bonuses credited automatically). Compute `effective = gross − collected`. Update `best` if lower.
+
+**Why this is exact:** the globally optimal tour T\* is a simple path (no node revisits). Its segments are therefore node-disjoint by construction. When realizing the ordering of T\* with the forward sweep, no segment's intermediate nodes are in `visitedDense` (they haven't been visited yet) — so no repair is needed and the realized cost equals T\*'s cost exactly. Since we enumerate all orderings with lb < best (guaranteed by removing `bestReach` pruning), the ordering of T\* is always reached before the B&B cutoff fires.
+
+### Step 6 — Branch-and-bound cutoff
+
+As soon as the next ordering's lower bound minus `bonusCredit` ≥ `best.effectiveFuel`, stop iterating — no further ordering in this subset can improve best.
+
+### Step 7 — Timeout
+
+5-minute wall-clock timeout checked at every realization attempt. On timeout: return best route found with `timedOut: true`. If no route found before timeout: `success: false`.
+
+---
+
+## File map
+
+| File | Purpose |
+|---|---|
+| `costMatrix.ts` | Dense N×N cost matrix + planet index mapping |
+| `edgeCost.ts` | Euclidean distance + route discount logic + undirected `routeKey` |
+| `allPairsSP.ts` | Dijkstra from each forced-stop node; stores cost + path |
+| `heldKarp.ts` | Full permutation enumeration via min-heap; yields orderings in ascending lb order |
+| `heldKarpSolve.ts` | Bonus subset loop, realization, repair Dijkstra, B&B cutoff |
+| `solve.ts` | Public entry point — delegates to `heldKarpSolve` |
+| `heap.ts` | Binary min-heap used by Dijkstra and Held-Karp |
+| `types.ts` | `Planet`, `Route`, `SolveInput`, `SolveResult` interfaces |
+| `adapters.ts` | Converts raw API shapes to solver types |
+| `solver.worker.ts` | Web Worker wrapper so the UI doesn't block |
+
+---
+
+## Running things locally
+
+### Unit and correctness tests
+
+```bash
+npm test
+```
+
+Runs all three test suites via Vitest:
+
+| Suite | File | What it covers |
+|---|---|---|
+| Solver correctness (T1–T13) | `src/solver/__tests__/solver.test.ts` | Edge cases: empty mandatories, forbidden, bonuses, no-path, timeout, performance |
+| Real-world challenges (T14–T19) | `src/solver/__tests__/realWorld.test.ts` | 6 verified-optimal challenges from the live game (Mandalore + Coruscant series) |
+| Adapter round-trip (T11) | `src/solver/__tests__/adapters.test.ts` | API → solver type conversion |
+
+To run a single suite:
+
+```bash
+npm test -- realWorld      # only real-world tests
+npm test -- solver         # only unit tests
+npm test -- adapters       # only adapter tests
+```
+
+### Debug a specific challenge (instrumented trace)
+
+```bash
+npx tsx scripts/debug-solver.ts
+npx tsx scripts/debug-solver.ts --top=50          # show first 50 orderings
+npx tsx scripts/debug-solver.ts --target=3400     # stop once a result beats 3400
+```
+
+Logs every ordering tried by Held-Karp with its lower bound, each segment's SP path, any conflict/repair with cost delta, and a final summary vs. game optimal. Hard-coded to the T14 Mandalore challenge. Edit the constants at the top of the script to test other challenges.
+
+### Dry run against the live API (no submission)
+
+```bash
+npm run solve:dry
+```
+
+Reads `VITE_API_BASE_URL`, `VITE_PLAYER_GUID`, `VITE_PLAYER_EMAIL` from `.env.local`. Fetches live challenges and map data, solves all, prints the routes and fuel scores that **would** be submitted — but does not call the submission endpoint.
+
+To run with env vars inline:
+
+```bash
+VITE_API_BASE_URL=https://... VITE_PLAYER_GUID=... VITE_PLAYER_EMAIL=... npm run solve:dry
+```
+
+### Submit manually (live, real submission)
+
+```bash
+npx tsx scripts/auto-solve.ts
+```
+
+Polls for active challenges, solves all, submits sequentially (Level 1 → 2 → 3), waits for `IsFinished` confirmation before moving to the next. Exits with code 1 if any submission fails after 3 attempts.
+
+---
+
+## Deploying to AWS
+
+The Lambda is deployed via AWS SAM. Everything is pre-configured in `samconfig.toml` (stack name, region `eu-central-1`, S3 bucket, API base URL) and `template.yaml` (two functions: live solver + dry-run).
+
+### First-time setup
+
+Requires AWS CLI configured with credentials for account `224802931430`.
+
+### Deploy (every time you push solver or Lambda changes)
+
+```bash
+# 1. Bundle both Lambda handlers
+npm run build:lambda
+
+# 2. Deploy — SAM reuses PlayerGuid and PlayerEmail already in the stack
+sam deploy
+```
+
+SAM will show the changeset and ask for confirmation before applying.
+
+### What gets deployed
+
+| Lambda function | Trigger | Purpose |
+|---|---|---|
+| `route-solver-daily` | EventBridge cron `58 23 * * ? *` (23:58 UTC) | Live solver — polls, solves, submits |
+| `route-solver-dry-run` | Manual only (`aws lambda invoke` or console) | Verifies API + solver without submitting |
+
+### Verify the EventBridge rule is wired correctly
+
+```bash
+aws events list-rules --region eu-central-1 --query "Rules[?contains(Name, 'route-solver')]"
+aws events list-targets-by-rule --rule route-solver-daily-trigger --region eu-central-1
+```
+
+---
+
+## Testing in AWS
+
+### Invoke the dry-run Lambda
+
+```bash
+aws lambda invoke --function-name route-solver-dry-run --region eu-central-1 out.json && cat out.json
+```
+
+Returns a JSON summary with per-challenge solver results, effectiveFuel, and the full route that would be submitted. Nothing is submitted. Use this to confirm API connectivity, env vars, and solver correctness after any deployment.
+
+### Check live Lambda logs
+
+```bash
+aws logs tail /aws/lambda/route-solver-daily --region eu-central-1 --follow
+```
+
+To check whether the 00:00 UTC trigger fired (macOS date syntax):
+
+```bash
+aws logs filter-log-events \
+  --log-group-name /aws/lambda/route-solver-daily \
+  --region eu-central-1 \
+  --start-time $(date -v-1d -v23H -v50M -v0S +%s)000 \
+  --end-time $(date -v0H -v10M -v0S +%s)000
+```
+
+Empty `events` + empty `searchedLogStreams` = Lambda was never invoked (likely not deployed before midnight). Log entries ending in a timeout error = Lambda ran but challenges weren't available within 5 minutes.

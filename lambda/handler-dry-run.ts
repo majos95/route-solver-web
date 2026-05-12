@@ -10,6 +10,9 @@ const BASE_URL = process.env.VITE_API_BASE_URL
 const PLAYER_GUID = process.env.VITE_PLAYER_GUID
 const PLAYER_EMAIL = process.env.VITE_PLAYER_EMAIL
 
+const POLL_INTERVAL_MS = 300
+const POLL_TIMEOUT_MS = 5 * 60_000
+
 interface ChallengeOut {
   ChallengeId?: number
   ChallengeName: string
@@ -47,6 +50,10 @@ interface DryRunResult {
   error?: string
 }
 
+function sleep(ms: number) {
+  return new Promise(r => setTimeout(r, ms))
+}
+
 function getAuth() {
   if (!BASE_URL || !PLAYER_GUID || !PLAYER_EMAIL) {
     throw new Error('Missing env vars: VITE_API_BASE_URL, VITE_PLAYER_GUID, VITE_PLAYER_EMAIL')
@@ -60,6 +67,22 @@ async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, { headers: { ...auth } })
   if (!res.ok) throw new Error(`GET ${path} → ${res.status} ${res.statusText}`)
   return res.json()
+}
+
+async function pollUntilChallengesAvailable(): Promise<void> {
+  console.log('Polling for unfinished challenges...')
+  const deadline = Date.now() + POLL_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    const data = await apiGet<ChallengeOut[]>('/GetDailyChallenge')
+    const pending = Array.isArray(data) ? data.filter(c => !c.IsFinished) : []
+    if (pending.length > 0) {
+      console.log(`Unfinished challenge(s) found: ${pending.map(c => c.ChallengeName).join(', ')}`)
+      return
+    }
+    console.log(`No unfinished challenges yet — retrying in ${POLL_INTERVAL_MS}ms...`)
+    await sleep(POLL_INTERVAL_MS)
+  }
+  throw new Error('Timed out waiting for new challenges after 5 minutes')
 }
 
 export const handler = async (): Promise<DryRunResult> => {
@@ -79,10 +102,13 @@ export const handler = async (): Promise<DryRunResult> => {
     // Verify auth is configured before hitting the API
     getAuth()
 
+    const mapDataPromise = apiGet<MapData>('/GetPlanetsAndRoutes')
+    await pollUntilChallengesAvailable()
+
     console.log('\nFetching challenges and map data...')
     const [allChallenges, mapData] = await Promise.all([
       apiGet<ChallengeOut[]>('/GetDailyChallenge'),
-      apiGet<MapData>('/GetPlanetsAndRoutes'),
+      mapDataPromise,
     ])
 
     const planets = (mapData.Planets ?? []).map(adaptPlanet)

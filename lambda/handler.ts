@@ -9,7 +9,7 @@ const BASE_URL = process.env.VITE_API_BASE_URL
 const PLAYER_GUID = process.env.VITE_PLAYER_GUID
 const PLAYER_EMAIL = process.env.VITE_PLAYER_EMAIL
 
-const POLL_INTERVAL_MS = 5_000
+const POLL_INTERVAL_MS = 300
 const POLL_TIMEOUT_MS = 5 * 60_000
 const MAX_RETRIES = 3
 const RETRY_DELAY_MS = 3_000
@@ -71,12 +71,13 @@ async function pollUntilChallengesAvailable(): Promise<void> {
   console.log('Polling for new daily challenges...')
   const deadline = Date.now() + POLL_TIMEOUT_MS
   while (Date.now() < deadline) {
-    const data = await apiGet<ChallengeOut[]>('/GetActiveLevelDailyChallenge')
-    if (Array.isArray(data) && data.length > 0) {
-      console.log(`Active challenge(s) found: ${data.map(c => c.ChallengeName).join(', ')}`)
+    const data = await apiGet<ChallengeOut[]>('/GetDailyChallenge')
+    const pending = Array.isArray(data) ? data.filter(c => !c.IsFinished) : []
+    if (pending.length > 0) {
+      console.log(`Unfinished challenge(s) found: ${pending.map(c => c.ChallengeName).join(', ')}`)
       return
     }
-    console.log(`No active challenges yet — retrying in ${POLL_INTERVAL_MS / 1000}s...`)
+    console.log(`No unfinished challenges yet — retrying in ${POLL_INTERVAL_MS / 1000}s...`)
     await sleep(POLL_INTERVAL_MS)
   }
   throw new Error('Timed out waiting for new challenges after 5 minutes')

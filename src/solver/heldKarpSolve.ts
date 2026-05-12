@@ -8,46 +8,39 @@ import { MinHeap } from './heap'
 
 const TIMEOUT_MS = 5 * 60 * 1000
 
-// Single Dijkstra pass on the dense cost matrix.
-// additionalForbidden must NOT include dst (target must remain reachable).
-function repairDijkstra(
-  matrix: CostMatrix,
-  src: number,
-  dst: number,
-  baseForbidden: ReadonlySet<number>,
-  additionalForbidden: ReadonlySet<number>,
-): { cost: number; path: number[] } | null {
-  const { n, data } = matrix
-  const dist = new Float64Array(n).fill(Infinity)
-  const prev = new Int32Array(n).fill(-1)
-  dist[src] = 0
-  const pq = new MinHeap<number>()
-  pq.push(0, src)
-
-  while (pq.size > 0) {
-    const [d, u] = pq.pop()!
-    if (d > dist[u]) continue
-    if (u === dst) break
-    const base = u * n
-    for (let v = 0; v < n; v++) {
-      if (v === u || baseForbidden.has(v) || additionalForbidden.has(v)) continue
-      const nd = d + data[base + v]
-      if (nd < dist[v]) { dist[v] = nd; prev[v] = u; pq.push(nd, v) }
+// Find transit nodes that appear as intermediates on 2+ segment SP paths in this ordering.
+// These bottleneck nodes are tracked in the DP bitmask so consuming one in an early segment
+// doesn't silently block a later segment from using the same node.
+function identifyKeyNodes(
+  ordering: number[],
+  forcedIdxs: number[],
+  sp: AllPairsSP,
+  forcedSet: ReadonlySet<number>,
+): number[] {
+  const freq = new Map<number, number>()
+  for (let i = 0; i < ordering.length - 1; i++) {
+    const src = forcedIdxs[ordering[i]]
+    const dst = forcedIdxs[ordering[i + 1]]
+    const path = sp.spPath.get(src)?.[dst]
+    if (!path) continue
+    for (let k = 1; k < path.length - 1; k++) {
+      const node = path[k]
+      if (forcedSet.has(node)) continue
+      freq.set(node, (freq.get(node) ?? 0) + 1)
     }
   }
-
-  if (dist[dst] === Infinity) return null
-  const path: number[] = []
-  let cur = dst
-  while (cur !== -1) { path.unshift(cur); cur = prev[cur] }
-  return { cost: dist[dst], path }
+  return [...freq.entries()]
+    .filter(([, f]) => f >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([node]) => node)
 }
 
-// Forward-sweep realization of one Held-Karp ordering.
-// Returns null if any segment cannot be realized without revisiting a node.
-// bonusValueByDense includes ALL valid bonuses (not just the current subset),
-// so transit bonuses are credited if encountered.
-function realizeOrdering(
+// Realize one Held-Karp ordering via DP on joint state (segment, planet, keyNodeMask).
+// Tracks which bottleneck transit nodes have been consumed across segments so that
+// later segments can route around them rather than taking expensive repairs.
+// Returns null if no valid simple path exists for this ordering.
+function realizeOrderingDP(
   ordering: number[],            // indices into forcedIdxs; first and last are both 0 (= start)
   forcedIdxs: number[],         // forcedIdxs[i] = dense index of i-th forced stop
   sp: AllPairsSP,
@@ -55,72 +48,119 @@ function realizeOrdering(
   matrix: CostMatrix,
   bonusValueByDense: ReadonlyMap<number, number>,
 ): { route: number[]; gross: number; collected: number } | null {
-  const startDense = forcedIdxs[0]
-  const visitedDense = new Set<number>([startDense])
-  const segPaths: number[][] = []
-  let gross = 0
+  const { n, data } = matrix
+  const segCount = ordering.length - 1
+  const stops = ordering.map(i => forcedIdxs[i])
+  const startDense = stops[0]
 
-  // All dense indices that are forced stops (endpoints in the ordering), for conflict detection.
-  const allForcedDense = new Set(forcedIdxs)
+  const forcedSet = new Set(forcedIdxs)
+  const keyNodes = identifyKeyNodes(ordering, forcedIdxs, sp, forcedSet)
+  const K = keyNodes.length
+  const maskCount = 1 << K
+  const keyBit = new Map<number, number>()
+  for (let k = 0; k < K; k++) keyBit.set(keyNodes[k], 1 << k)
 
-  for (let i = 0; i < ordering.length - 1; i++) {
-    const srcDense = forcedIdxs[ordering[i]]
-    const dstDense = forcedIdxs[ordering[i + 1]]
-    const isLastSeg = i === ordering.length - 2
+  // State encoding: (seg * n + planet) * maskCount + mask
+  const encode = (seg: number, planet: number, mask: number) =>
+    (seg * n + planet) * maskCount + mask
 
-    // Forced stop dstDense already visited as a transit → ordering is unrecoverable.
-    if (!isLastSeg && visitedDense.has(dstDense)) return null
+  const totalStates = (segCount + 1) * n * maskCount
+  const dist = new Float64Array(totalStates).fill(Infinity)
+  const parent = new Int32Array(totalStates).fill(-2)  // -2 = unvisited, -1 = root
 
-    let path = sp.spPath.get(srcDense)?.[dstDense] ?? null
-    let cost = path !== null ? sp.spCost.get(srcDense)![dstDense] : Infinity
-
-    if (path === null) return null  // no precomputed path at all (unreachable)
-
-    // Forward-sweep conflict check: any intermediate node is either already visited OR
-    // is a future forced stop (would create a revisit when that stop is processed later).
-    const intermediates = path.slice(1, -1)
-    const hasConflict = intermediates.some(v => visitedDense.has(v) || allForcedDense.has(v))
-
-    if (hasConflict) {
-      // Re-run Dijkstra forbidding visited nodes AND all forced stops (except dstDense).
-      // Forbidding future forced stops prevents them from being transited prematurely.
-      // Excluding dstDense keeps the target reachable.
-      const addForbidden = new Set(visitedDense)
-      for (const f of allForcedDense) addForbidden.add(f)
-      addForbidden.delete(dstDense)
-      const repaired = repairDijkstra(matrix, srcDense, dstDense, baseForbidden, addForbidden)
-      if (repaired === null) return null
-      path = repaired.path
-      cost = repaired.cost
-    }
-
-    gross += cost
-    segPaths.push(path)
-
-    // Grow visitedDense: every node in this segment (excluding the source, which is already there).
-    for (const v of path.slice(1)) visitedDense.add(v)
+  // Per-segment forbidden sets:
+  //   past: stops already visited (stops[1..seg]) — must not revisit
+  //   future: stops not yet targeted (stops[seg+2..segCount]) — must not transit through prematurely
+  const segPast: Set<number>[] = []
+  const segFuture: Set<number>[] = []
+  for (let s = 0; s < segCount; s++) {
+    const past = new Set<number>()
+    for (let k = 1; k <= s; k++) past.add(stops[k])
+    segPast.push(past)
+    const future = new Set<number>()
+    for (let k = s + 2; k <= segCount; k++) future.add(stops[k])
+    segFuture.push(future)
   }
 
-  // Concatenate dense-index route.
-  const routeDense: number[] = [startDense]
-  for (const path of segPaths) for (const v of path.slice(1)) routeDense.push(v)
+  const initialMask = keyBit.get(startDense) ?? 0
+  const startState = encode(0, startDense, initialMask)
+  dist[startState] = 0
+  parent[startState] = -1
 
-  // fLen=1 edge case: start→start segment produces no new nodes; cap the route.
-  if (routeDense.length === 1) routeDense.push(startDense)
+  const pq = new MinHeap<number>()
+  pq.push(0, startState)
 
-  // Final no-revisit check: a repaired segment may have routed through a future forced stop.
+  while (pq.size > 0) {
+    const [d, state] = pq.pop()!
+    if (d > dist[state]) continue
+
+    const mask = state % maskCount
+    const rem = (state / maskCount) | 0
+    const planet = rem % n
+    const seg = (rem / n) | 0
+
+    if (seg === segCount) continue
+
+    const past = segPast[seg]
+    const future = segFuture[seg]
+    const nextStop = stops[seg + 1]
+    const base = planet * n
+
+    for (let w = 0; w < n; w++) {
+      if (w === planet) continue
+      if (baseForbidden.has(w)) continue
+      const wBit = keyBit.get(w) ?? 0
+      if (wBit && (mask & wBit)) continue  // key node already consumed
+      if (past.has(w)) continue            // already-visited forced stop
+      if (future.has(w)) continue          // future forced stop — premature transit
+
+      const newMask = mask | wBit
+      const newSeg = w === nextStop ? seg + 1 : seg
+      const nd = d + data[base + w]
+      const ns = encode(newSeg, w, newMask)
+      if (nd < dist[ns]) {
+        dist[ns] = nd
+        parent[ns] = state
+        pq.push(nd, ns)
+      }
+    }
+  }
+
+  // Find best terminal: minimum cost over all key-node masks at (segCount, stops[segCount])
+  const terminalPlanet = stops[segCount]
+  let bestDist = Infinity
+  let bestState = -1
+  for (let mask = 0; mask < maskCount; mask++) {
+    const s = encode(segCount, terminalPlanet, mask)
+    if (dist[s] < bestDist) { bestDist = dist[s]; bestState = s }
+  }
+  if (!isFinite(bestDist)) return null
+
+  // Reconstruct dense-index route by following parent pointers
+  const routeDense: number[] = []
+  let cur = bestState
+  while (cur !== -1) {
+    routeDense.unshift(((cur / maskCount) | 0) % n)
+    cur = parent[cur]
+  }
+
+  // Verify simple path: bitmask only tracks K key nodes, so check no other revisits slipped through
   const seen = new Set<number>()
   for (let k = 0; k < routeDense.length; k++) {
     const v = routeDense[k]
-    const isEndpoint = k === 0 || k === routeDense.length - 1
-    if (seen.has(v) && !(isEndpoint && v === startDense)) return null
+    const isEnd = k === 0 || k === routeDense.length - 1
+    if (seen.has(v) && !(isEnd && v === startDense)) return null
     seen.add(v)
   }
 
-  // Collect bonus value for every bonus planet that appears in the route.
+  let gross = 0
+  for (let k = 0; k < routeDense.length - 1; k++)
+    gross += data[routeDense[k] * n + routeDense[k + 1]]
+
+  // bonusValueByDense includes ALL valid bonuses; transit bonuses are credited if encountered.
   let collected = 0
-  for (const denseIdx of routeDense) {
-    const val = bonusValueByDense.get(denseIdx)
+  for (const idx of routeDense) {
+    const val = bonusValueByDense.get(idx)
     if (val !== undefined) collected += val
   }
 
@@ -196,7 +236,12 @@ export function heldKarpSolve(input: SolveInput): SolveResult {
 
   // Steps 3+4: enumerate bonus subsets in descending total value order
   const bonusCount = validBonuses.length
+  // Process the empty-bonus subset first to establish an initial upper bound.
+  // Without a finite best, the B&B cutoff never fires, and heldKarpGen can
+  // grow a heap of O(n!) entries before yielding its first ordering (OOM for n≥11).
   const subsets = Array.from({ length: 1 << bonusCount }, (_, i) => i).sort((a, b) => {
+    if (a === 0) return -1
+    if (b === 0) return 1
     let va = 0, vb = 0
     for (let k = 0; k < bonusCount; k++) {
       if (a & (1 << k)) va += validBonuses[k].value
@@ -235,12 +280,12 @@ export function heldKarpSolve(input: SolveInput): SolveResult {
       for (let j = 0; j < fLen; j++) hkCosts[i * fLen + j] = row[forcedIdxs[j]]
     }
 
-    // Steps 5+6: enumerate orderings, realize with forward-sweep repair, B&B cutoff
+    // Steps 5+6: enumerate orderings, realize with forward-sweep DP repair, B&B cutoff
     for (const { ordering, cost: lbCost } of heldKarpGen(fLen, hkCosts)) {
       if (Date.now() >= deadline) { best.timedOut = true; break }
       if (lbCost - bonusCredit >= best.effectiveFuel) break  // B&B cutoff
 
-      const result = realizeOrdering(ordering, forcedIdxs, sp, forbiddenDenseSet, matrix, bonusValueByDense)
+      const result = realizeOrderingDP(ordering, forcedIdxs, sp, forbiddenDenseSet, matrix, bonusValueByDense)
       if (result === null) continue
 
       const effective = result.gross - result.collected

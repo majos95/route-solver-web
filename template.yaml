@@ -17,7 +17,7 @@ Globals:
   Function:
     Runtime: nodejs20.x
     Timeout: 360          # 5-min poll ceiling + submission headroom
-    MemorySize: 256
+    MemorySize: 512
     Environment:
       Variables:
         VITE_API_BASE_URL: !Ref ApiBaseUrl
@@ -36,7 +36,7 @@ Resources:
         DailyTrigger:
           Type: Schedule
           Properties:
-            Schedule: cron(0 0 * * ? *)   # 00:00 UTC every day
+            Schedule: cron(58 23 * * ? *)  # 23:58 UTC — polls into 00:00 UTC challenge window
             Name: route-solver-daily-trigger
             Description: Daily 00:00 UTC trigger for the route solver
             Enabled: true

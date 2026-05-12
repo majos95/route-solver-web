@@ -4,7 +4,22 @@ interface HkEntry {
   cost: number
   mask: number   // bitmask of visited forced-stop indices
   last: number   // index in forcedStops of last visited node
-  path: number[] // sequence of forcedStops indices visited so far
+  nodeIdx: number // index into btNode/btParent for path reconstruction
+}
+
+// Backtrack arrays: form a linked list of visited nodes.
+// btNode[i]   = forced-stop index visited at this step
+// btParent[i] = nodeIdx of the previous step (-1 at root)
+// Stored externally (not per-entry) to avoid O(k) copy on each heap push.
+
+function buildPath(nodeIdx: number, btNode: number[], btParent: number[]): number[] {
+  const path: number[] = []
+  let i = nodeIdx
+  while (i >= 0) {
+    path.unshift(btNode[i])
+    i = btParent[i]
+  }
+  return path
 }
 
 // n        = number of forced stops (index 0 = start)
@@ -28,17 +43,22 @@ export function* heldKarpGen(
     return
   }
 
+  const btNode: number[] = [0]
+  const btParent: number[] = [-1]
+
   const pq = new MinHeap<HkEntry>()
-  pq.push(0, { cost: 0, mask: 1, last: 0, path: [0] })
+  pq.push(0, { cost: 0, mask: 1, last: 0, nodeIdx: 0 })
 
   const fullMask = (1 << n) - 1
 
   while (pq.size > 0) {
     const [, entry] = pq.pop()!
-    const { cost, mask, last, path } = entry
+    const { cost, mask, last, nodeIdx } = entry
 
     if (mask === fullMask) {
-      yield { ordering: [...path, 0], cost }
+      const path = buildPath(nodeIdx, btNode, btParent)
+      path.push(0)
+      yield { ordering: path, cost }
       continue
     }
 
@@ -47,11 +67,15 @@ export function* heldKarpGen(
       const newMask = mask | (1 << v)
       const newCost = cost + costs[last * n + v]
 
+      const newNodeIdx = btNode.length
+      btNode.push(v)
+      btParent.push(nodeIdx)
+
       if (newMask === fullMask) {
         const totalCost = newCost + costs[v * n + 0]
-        pq.push(totalCost, { cost: totalCost, mask: newMask, last: v, path: [...path, v] })
+        pq.push(totalCost, { cost: totalCost, mask: newMask, last: v, nodeIdx: newNodeIdx })
       } else {
-        pq.push(newCost, { cost: newCost, mask: newMask, last: v, path: [...path, v] })
+        pq.push(newCost, { cost: newCost, mask: newMask, last: v, nodeIdx: newNodeIdx })
       }
     }
   }
