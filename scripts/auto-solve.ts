@@ -18,8 +18,8 @@ const AUTH = { PlayerGuid: PLAYER_GUID, PlayerEmail: PLAYER_EMAIL }
 
 const DRY_RUN = process.env.DRY_RUN === 'true'
 
-const POLL_INTERVAL_MS = 5_000
-const POLL_TIMEOUT_MS = 5 * 60_000
+const POLL_INTERVAL_MS = 200
+const POLL_TIMEOUT_MS = 10 * 60_000
 const MAX_RETRIES = 3
 const RETRY_DELAY_MS = 3_000
 
@@ -79,7 +79,7 @@ async function pollUntilChallengesAvailable(): Promise<void> {
     console.log(`No active challenges yet — retrying in ${POLL_INTERVAL_MS / 1000}s...`)
     await sleep(POLL_INTERVAL_MS)
   }
-  throw new Error('Timed out waiting for new challenges after 5 minutes')
+  throw new Error('Timed out waiting for new challenges after 10 minutes')
 }
 
 async function submitWithRetry(
@@ -121,18 +121,21 @@ async function submitWithRetry(
 }
 
 async function main() {
+  // Kick off map fetch immediately — it's ready before the poll completes
+  const mapDataPromise = apiGet<MapData>('/GetPlanetsAndRoutes')
+
   if (!DRY_RUN) await pollUntilChallengesAvailable()
 
   console.log('Fetching challenges and map data...')
   const [allChallenges, mapData] = await Promise.all([
     apiGet<ChallengeOut[]>('/GetDailyChallenge'),
-    apiGet<MapData>('/GetPlanetsAndRoutes'),
+    mapDataPromise,
   ])
 
   const planets = (mapData.Planets ?? []).map(adaptPlanet)
   const routes = (mapData.Routes ?? []).map(adaptRoute)
 
-  // Sort by ChallengeId ascending to guarantee Level1 → Level2 → Level3 submission order
+  // Sort by ChallengeId ascending to guarantee Level1 → Level2 → Level3 order
   const sorted = [...allChallenges].sort((a, b) => (a.ChallengeId ?? 0) - (b.ChallengeId ?? 0))
   const pending = DRY_RUN ? sorted : sorted.filter((c) => !c.IsFinished)
   if (pending.length === 0) {
@@ -141,54 +144,58 @@ async function main() {
   }
   console.log(`Pending: ${pending.map((c) => c.ChallengeName).join(', ')}`)
 
-  // Solve all pending challenges synchronously up front so submission is instant
-  console.log('Solving all challenges...')
-  const solveStart = performance.now()
-  const solved = pending.map((challenge, i) => {
+  // Process each challenge in ID order: solve → submit immediately
+  for (const [i, challenge] of pending.entries()) {
     if (challenge.ChallengeId === undefined) {
       throw new Error(`Challenge "${challenge.ChallengeName}" has no ChallengeId — cannot submit`)
     }
     const level = `#${challenge.ChallengeId} Level ${i + 1}`
+
+    console.log(`\nSolving [${level}] "${challenge.ChallengeName}"...`)
     const t0 = performance.now()
     const input = adaptChallenge(challenge, planets, routes)
     const result = solve(input)
     const ms = (performance.now() - t0).toFixed(0)
+
     if (!result.success) {
       throw new Error(`Solver failed for "${challenge.ChallengeName}": ${result.errorMessage}`)
     }
     if (result.timedOut) {
-      console.warn(`  [${level}] "${challenge.ChallengeName}" → TIMED OUT — submitting best-so-far: effectiveFuel=${result.effectiveFuel} (${ms}ms)`)
+      console.warn(`  → TIMED OUT — submitting best-so-far: effectiveFuel=${result.effectiveFuel} (${ms}ms)`)
     } else {
-      console.log(`  [${level}] "${challenge.ChallengeName}" → effectiveFuel=${result.effectiveFuel} (${ms}ms)`)
+      console.log(`  → effectiveFuel=${result.effectiveFuel} (${ms}ms)`)
     }
-    return { challenge, result, level }
-  })
-  const totalSolveMs = (performance.now() - solveStart).toFixed(0)
-  console.log(`All challenges solved in ${totalSolveMs}ms total`)
 
-  if (DRY_RUN) {
-    console.log('\n--- DRY RUN: routes that would be submitted ---')
-    for (const { challenge, result, level } of solved) {
-      console.log(`\n[${level}] ${challenge.ChallengeName}`)
-      console.log(`  Effective fuel : ${result.effectiveFuel}`)
+    const route = result.orderedRoute.map((p) => ({ PlanetId: p.id, Name: p.name }))
+
+    if (DRY_RUN) {
       console.log(`  Gross fuel     : ${result.grossFuel}`)
       console.log(`  Bonus collected: ${result.collectedBonus}`)
       console.log(`  Route (${result.orderedRoute.length} planets): ${result.orderedRoute.map((p) => p.name).join(' → ')}`)
+      console.log(`  Testing submission endpoint...`)
+      const url = new URL(`${BASE_URL}/SubmitChallengeSolution`)
+      url.searchParams.set('ChallengeId', String(challenge.ChallengeId))
+      const res = await fetch(url.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...AUTH },
+        body: JSON.stringify(route),
+      })
+      const body = await res.text()
+      console.log(`  → HTTP ${res.status}: ${body}`)
+      continue
     }
-    console.log('\nDry run complete — nothing was submitted.')
-    return
-  }
 
-  // Submit sequentially, gated by IsFinished confirmation per level
-  for (const { challenge, result } of solved) {
-    const route = result.orderedRoute.map((p) => ({ PlanetId: p.id, Name: p.name }))
-    const ok = await submitWithRetry(challenge.ChallengeId!, challenge.ChallengeName, route)
+    const ok = await submitWithRetry(challenge.ChallengeId, challenge.ChallengeName, route)
     if (!ok) {
       process.exit(1)
     }
   }
 
-  console.log('Done — all challenges submitted successfully.')
+  if (DRY_RUN) {
+    console.log('\nDry run complete — test submissions fired, no retry logic applied.')
+  } else {
+    console.log('\nDone — all challenges submitted successfully.')
+  }
 }
 
 main().catch((err) => {

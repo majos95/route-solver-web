@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Daily challenge auto-solver — EventBridge fires at 00:00 UTC
+Description: Daily challenge auto-solver — invoke manually via CLI or console
 
 Parameters:
   ApiBaseUrl:
@@ -32,14 +32,6 @@ Resources:
       CodeUri: dist/lambda/
       Handler: handler.handler
       Description: Polls for the daily challenge, solves it, and submits
-      Events:
-        DailyTrigger:
-          Type: Schedule
-          Properties:
-            Schedule: cron(58 23 * * ? *)  # 23:58 UTC — polls into 00:00 UTC challenge window
-            Name: route-solver-daily-trigger
-            Description: Daily 00:00 UTC trigger for the route solver
-            Enabled: true
 
   # Keep the last 30 invocation logs for debugging
   AutoSolverLogGroup:

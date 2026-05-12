@@ -11,6 +11,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "test": "vitest run",
+    "solve": "tsx --env-file=.env.local scripts/auto-solve.ts",
     "solve:dry": "DRY_RUN=true tsx --env-file=.env.local scripts/auto-solve.ts",
     "build:lambda": "esbuild lambda/handler.ts lambda/handler-dry-run.ts --bundle --platform=node --target=node20 --format=cjs --outdir=dist/lambda && echo '{\"type\":\"commonjs\"}' > dist/lambda/package.json"
   },
