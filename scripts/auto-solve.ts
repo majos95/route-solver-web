@@ -20,8 +20,6 @@ const DRY_RUN = process.env.DRY_RUN === 'true'
 
 const POLL_INTERVAL_MS = 200
 const POLL_TIMEOUT_MS = 10 * 60_000
-const MAX_RETRIES = 3
-const RETRY_DELAY_MS = 3_000
 
 interface ChallengeOut {
   ChallengeId?: number
@@ -67,14 +65,22 @@ async function apiPost<T>(path: string, query: Record<string, unknown>, body: un
   return res.json()
 }
 
-async function pollUntilChallengesAvailable(): Promise<void> {
+// Returns true when the API response contains at least one challenge that hasn't been
+// completed yet. Missing IsFinished (new challenges) counts as pending.
+export function hasActiveChallenges(data: ChallengeOut[]): boolean {
+  return Array.isArray(data) && data.some((c) => !c.IsFinished)
+}
+
+// Poll /GetDailyChallenge (same endpoint as the solver) until at least one challenge is
+// pending. Returns the full challenge list so the caller doesn't need a second fetch.
+async function pollUntilChallengesAvailable(): Promise<ChallengeOut[]> {
   console.log('Polling for new daily challenges...')
   const deadline = Date.now() + POLL_TIMEOUT_MS
   while (Date.now() < deadline) {
-    const data = await apiGet<ChallengeOut[]>('/GetActiveLevelDailyChallenge')
-    if (Array.isArray(data) && data.length > 0) {
-      console.log(`Active challenge(s) found: ${data.map((c) => c.ChallengeName).join(', ')}`)
-      return
+    const data = await apiGet<ChallengeOut[]>('/GetDailyChallenge')
+    if (hasActiveChallenges(data)) {
+      console.log(`Challenges found: ${data.filter((c) => !c.IsFinished).map((c) => c.ChallengeName).join(', ')}`)
+      return data
     }
     console.log(`No active challenges yet — retrying in ${POLL_INTERVAL_MS / 1000}s...`)
     await sleep(POLL_INTERVAL_MS)
@@ -82,53 +88,33 @@ async function pollUntilChallengesAvailable(): Promise<void> {
   throw new Error('Timed out waiting for new challenges after 10 minutes')
 }
 
-async function submitWithRetry(
+async function submit(
   challengeId: number,
   challengeName: string,
   route: { PlanetId?: number; Name: string }[],
-): Promise<boolean> {
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    console.log(`Submitting "${challengeName}" (attempt ${attempt}/${MAX_RETRIES})...`)
-
-    try {
-      const result = await apiPost<SubmissionResult>(
-        '/SubmitChallengeSolution',
-        { ChallengeId: challengeId },
-        route,
-      )
-      console.log(`  → ${result.FeedbackMessage} | Coaxium: ${result.Coaxium}`)
-    } catch (err) {
-      console.warn(`  → Submission request failed: ${err}`)
-    }
-
-    await sleep(1_000)
-
-    const updated = await apiGet<ChallengeOut[]>('/GetDailyChallenge')
-    const challenge = updated.find((c) => c.ChallengeId === challengeId)
-    if (challenge?.IsFinished) {
-      console.log(`  → Confirmed finished ✓`)
-      return true
-    }
-
-    if (attempt < MAX_RETRIES) {
-      console.warn(`  → Not marked finished, retrying in ${RETRY_DELAY_MS / 1000}s...`)
-      await sleep(RETRY_DELAY_MS)
-    }
+): Promise<void> {
+  console.log(`Submitting "${challengeName}"...`)
+  try {
+    const result = await apiPost<SubmissionResult>(
+      '/SubmitChallengeSolution',
+      { ChallengeId: challengeId },
+      route,
+    )
+    console.log(`  → ${result.FeedbackMessage} | Coaxium: ${result.Coaxium}`)
+  } catch (err) {
+    console.warn(`  → Submission request failed: ${err}`)
   }
-
-  console.error(`"${challengeName}" not finished after ${MAX_RETRIES} attempts — aborting.`)
-  return false
 }
 
 async function main() {
   // Kick off map fetch immediately — it's ready before the poll completes
   const mapDataPromise = apiGet<MapData>('/GetPlanetsAndRoutes')
 
-  if (!DRY_RUN) await pollUntilChallengesAvailable()
+  const polledChallenges = DRY_RUN ? null : await pollUntilChallengesAvailable()
 
   console.log('Fetching challenges and map data...')
   const [allChallenges, mapData] = await Promise.all([
-    apiGet<ChallengeOut[]>('/GetDailyChallenge'),
+    polledChallenges ?? apiGet<ChallengeOut[]>('/GetDailyChallenge'),
     mapDataPromise,
   ])
 
@@ -172,30 +158,12 @@ async function main() {
       console.log(`  Gross fuel     : ${result.grossFuel}`)
       console.log(`  Bonus collected: ${result.collectedBonus}`)
       console.log(`  Route (${result.orderedRoute.length} planets): ${result.orderedRoute.map((p) => p.name).join(' → ')}`)
-      console.log(`  Testing submission endpoint...`)
-      const url = new URL(`${BASE_URL}/SubmitChallengeSolution`)
-      url.searchParams.set('ChallengeId', String(challenge.ChallengeId))
-      const res = await fetch(url.toString(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...AUTH },
-        body: JSON.stringify(route),
-      })
-      const body = await res.text()
-      console.log(`  → HTTP ${res.status}: ${body}`)
-      continue
     }
 
-    const ok = await submitWithRetry(challenge.ChallengeId, challenge.ChallengeName, route)
-    if (!ok) {
-      process.exit(1)
-    }
+    await submit(challenge.ChallengeId, challenge.ChallengeName, route)
   }
 
-  if (DRY_RUN) {
-    console.log('\nDry run complete — test submissions fired, no retry logic applied.')
-  } else {
-    console.log('\nDone — all challenges submitted successfully.')
-  }
+  console.log('\nDone — all challenges submitted.')
 }
 
 main().catch((err) => {

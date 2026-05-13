@@ -167,6 +167,85 @@ function realizeOrderingDP(
   return { route: routeDense, gross, collected }
 }
 
+// Orienteering DP: identifies which bonus subsets are worth considering and their
+// DP-optimal ordering. Returns one candidate per unique bonus bitmask, sorted so the
+// mandatory-only subset (bonusMask=0) comes first — establishing an initial upper bound
+// before large subsets are attempted. Remaining candidates are sorted by lbCost ascending.
+// For subsets with fLen ≤ MAX_HK_N the caller hands off to heldKarpGen for full ordering
+// enumeration; for larger subsets the stored dpKeySeq is used as a fallback ordering.
+const MAX_HK_N = 11  // heldKarpGen is used for fLen ≤ this; DP fallback for fLen > this
+
+function orienteeringDPCandidates(
+  allKeyDense: number[],    // [startDense, m0..mM-1, b0..bB-1]
+  mandatoryCount: number,
+  bonusCount: number,
+  sp: AllPairsSP,
+  bonusValueByDense: ReadonlyMap<number, number>,
+): { bonusMask: number; lbCost: number; dpKeySeq: number[] }[] {
+  const nk = allKeyDense.length
+  const stateCount = (1 << nk) * nk
+  const dp  = new Float64Array(stateCount).fill(Infinity)
+  const par = new Int32Array(stateCount).fill(-1)
+
+  const mandatoryBits  = (2 << mandatoryCount) - 2  // bits 1..mandatoryCount
+  const bonusBitOffset = 1 + mandatoryCount          // bonus bits start here in the mask
+
+  dp[nk] = 0  // mask=1 (start visited), v=0, cost=0
+
+  for (let mask = 1; mask < (1 << nk); mask++) {
+    if (!(mask & 1)) continue
+    for (let v = 0; v < nk; v++) {
+      if (!(mask & (1 << v))) continue
+      const cur = dp[mask * nk + v]
+      if (!isFinite(cur)) continue
+      for (let u = 1; u < nk; u++) {
+        if (mask & (1 << u)) continue
+        const cost = sp.spCost.get(allKeyDense[v])?.[allKeyDense[u]]
+        if (cost === undefined || !isFinite(cost)) continue
+        const bonus = bonusValueByDense.get(allKeyDense[u]) ?? 0
+        const nd = cur + cost - bonus
+        const ns = (mask | (1 << u)) * nk + u
+        if (nd < dp[ns]) { dp[ns] = nd; par[ns] = mask * nk + v }
+      }
+    }
+  }
+
+  // For each unique bonus bitmask, record the best terminal state and backtrack it.
+  const bonusMaskBest = new Map<number, { lbCost: number; state: number }>()
+  for (let mask = 1; mask < (1 << nk); mask++) {
+    if ((mask & mandatoryBits) !== mandatoryBits) continue
+    for (let v = 0; v < nk; v++) {
+      if (!(mask & (1 << v))) continue
+      const cur = dp[mask * nk + v]
+      if (!isFinite(cur)) continue
+      const ret = v === 0 ? 0 : (sp.spCost.get(allKeyDense[v])?.[allKeyDense[0]] ?? Infinity)
+      if (!isFinite(ret)) continue
+      const total    = cur + ret
+      const bonusMask = mask >> bonusBitOffset
+      const existing = bonusMaskBest.get(bonusMask)
+      if (!existing || total < existing.lbCost) bonusMaskBest.set(bonusMask, { lbCost: total, state: mask * nk + v })
+    }
+  }
+
+  const results: { bonusMask: number; lbCost: number; dpKeySeq: number[] }[] = []
+  for (const [bonusMask, { lbCost, state }] of bonusMaskBest) {
+    const seq: number[] = []
+    let cur = state
+    while (cur !== -1) { seq.unshift(cur % nk); cur = par[cur] }
+    seq.push(0)
+    results.push({ bonusMask, lbCost, dpKeySeq: seq })
+  }
+
+  // Mandatory-only subset (bonusMask=0) goes first to establish an initial bound,
+  // preventing heldKarpGen from exploring unbounded orderings without a B&B threshold.
+  results.sort((a, b) => {
+    if (a.bonusMask === 0 && b.bonusMask !== 0) return -1
+    if (b.bonusMask === 0 && a.bonusMask !== 0) return 1
+    return a.lbCost - b.lbCost
+  })
+  return results
+}
+
 export function heldKarpSolve(input: SolveInput): SolveResult {
   const { planets, routes, startPlanetId, mandatoryIds, forbiddenIds, bonuses } = input
 
@@ -234,66 +313,58 @@ export function heldKarpSolve(input: SolveInput): SolveResult {
   }
   const best: Best = { effectiveFuel: Infinity, route: null, gross: 0, collected: 0, timedOut: false }
 
-  // Steps 3+4: enumerate bonus subsets in descending total value order
-  const bonusCount = validBonuses.length
-  // Process the empty-bonus subset first to establish an initial upper bound.
-  // Without a finite best, the B&B cutoff never fires, and heldKarpGen can
-  // grow a heap of O(n!) entries before yielding its first ordering (OOM for n≥11).
-  const subsets = Array.from({ length: 1 << bonusCount }, (_, i) => i).sort((a, b) => {
-    if (a === 0) return -1
-    if (b === 0) return 1
-    let va = 0, vb = 0
-    for (let k = 0; k < bonusCount; k++) {
-      if (a & (1 << k)) va += validBonuses[k].value
-      if (b & (1 << k)) vb += validBonuses[k].value
-    }
-    return vb - va
-  })
+  // Orienteering DP selects which bonus subsets to try; heldKarpGen enumerates orderings
+  // within each subset for small fLen (complete, correct), DP ordering for large fLen (no OOM).
+  const allKeyDense = [startIdx, ...mandatoryIdxs, ...validBonuses.map(b => bonusIdxByPlanetId.get(b.planetId)!)]
+  const bonusCandidates = orienteeringDPCandidates(
+    allKeyDense, mandatoryIdxs.length, validBonuses.length, sp, bonusValueByDense,
+  )
 
-  for (const bonusMask of subsets) {
+  for (const { bonusMask, lbCost, dpKeySeq } of bonusCandidates) {
     if (Date.now() >= deadline) { best.timedOut = true; break }
+    if (lbCost >= best.effectiveFuel) break  // B&B cutoff
 
-    const subsetBonuses = validBonuses.filter((_, k) => bonusMask & (1 << k))
-    const bonusCredit = subsetBonuses.reduce((s, b) => s + b.value, 0)
-    const bonusSubsetIdxs = subsetBonuses.map(b => bonusIdxByPlanetId.get(b.planetId)!)
+    const subsetBonuses    = validBonuses.filter((_, k) => bonusMask & (1 << k))
+    const bonusCredit      = subsetBonuses.reduce((s, b) => s + b.value, 0)
+    const bonusSubsetIdxs  = subsetBonuses.map(b => bonusIdxByPlanetId.get(b.planetId)!)
+    const forcedIdxs       = [startIdx, ...mandatoryIdxs, ...bonusSubsetIdxs]
+    const fLen             = forcedIdxs.length
 
-    const forcedIdxs = [startIdx, ...mandatoryIdxs, ...bonusSubsetIdxs]
-    const fLen = forcedIdxs.length
-
-    // Trivial case: no forced stops beyond start in this subset
-    if (fLen === 1) {
-      const effective = -bonusCredit  // gross = 0
-      if (effective < best.effectiveFuel) {
-        best.effectiveFuel = effective
-        best.route = [startIdx, startIdx]
-        best.gross = 0
-        best.collected = bonusCredit
+    if (fLen <= MAX_HK_N) {
+      // Full ordering enumeration via heldKarpGen — correct even under path interference.
+      const hkCosts = new Float64Array(fLen * fLen)
+      for (let i = 0; i < fLen; i++) {
+        const row = sp.spCost.get(forcedIdxs[i])
+        if (!row) continue
+        for (let j = 0; j < fLen; j++) hkCosts[i * fLen + j] = row[forcedIdxs[j]]
       }
-      continue
-    }
-
-    // Build fLen×fLen cost matrix for Held-Karp (spCost between forced stops)
-    const hkCosts = new Float64Array(fLen * fLen)
-    for (let i = 0; i < fLen; i++) {
-      const row = sp.spCost.get(forcedIdxs[i])
-      if (!row) continue
-      for (let j = 0; j < fLen; j++) hkCosts[i * fLen + j] = row[forcedIdxs[j]]
-    }
-
-    // Steps 5+6: enumerate orderings, realize with forward-sweep DP repair, B&B cutoff
-    for (const { ordering, cost: lbCost } of heldKarpGen(fLen, hkCosts)) {
-      if (Date.now() >= deadline) { best.timedOut = true; break }
-      if (lbCost - bonusCredit >= best.effectiveFuel) break  // B&B cutoff
-
-      const result = realizeOrderingDP(ordering, forcedIdxs, sp, forbiddenDenseSet, matrix, bonusValueByDense)
-      if (result === null) continue
-
-      const effective = result.gross - result.collected
-      if (effective < best.effectiveFuel) {
-        best.effectiveFuel = effective
-        best.route = result.route
-        best.gross = result.gross
-        best.collected = result.collected
+      for (const { ordering, cost: lbOrd } of heldKarpGen(fLen, hkCosts)) {
+        if (Date.now() >= deadline) { best.timedOut = true; break }
+        if (lbOrd - bonusCredit >= best.effectiveFuel) break
+        const result = realizeOrderingDP(ordering, forcedIdxs, sp, forbiddenDenseSet, matrix, bonusValueByDense)
+        if (result === null) continue
+        const effective = result.gross - result.collected
+        if (effective < best.effectiveFuel) {
+          best.effectiveFuel = effective
+          best.route         = result.route
+          best.gross         = result.gross
+          best.collected     = result.collected
+        }
+      }
+    } else {
+      // DP fallback for large subsets: use the DP-optimal ordering for this bonus mask.
+      const forcedSeq    = dpKeySeq.slice(0, -1)
+      const forcedDpIdxs = forcedSeq.map(ki => allKeyDense[ki])
+      const ordering     = forcedSeq.map((_, i) => i).concat([0])
+      const result = realizeOrderingDP(ordering, forcedDpIdxs, sp, forbiddenDenseSet, matrix, bonusValueByDense)
+      if (result !== null) {
+        const effective = result.gross - result.collected
+        if (effective < best.effectiveFuel) {
+          best.effectiveFuel = effective
+          best.route         = result.route
+          best.gross         = result.gross
+          best.collected     = result.collected
+        }
       }
     }
 

@@ -155,6 +155,23 @@ describe('T19: Coruscant Level 3', () => {
   }, 10_000)
 })
 
+// This Is The Way challenge IDs
+const KATARR     = 152
+const ITHOR      = 60
+const TRELLEN    = 14
+const CONSTANCIA = 19
+const SALLICHE   = 9
+const KIRA       = 187
+const ATRAVIS    = 191
+const MUSTAFAR   = 86
+const ZYGERRIA   = 148
+const MALACHOR   = 106
+const CANTONICA  = 161
+const BONADAN    = 140
+
+const TITW_MANDATORIES = [ITHOR, TRELLEN, CONSTANCIA]
+const TITW_FORBIDDEN   = [TIRAHNN, SALLICHE, CHARDAAN]
+
 // ── Live Long and Porsper challenges (2026-05-12) ────────────────────────────
 // Start: Loronar(30), Mandatory: Farstine(174), Uvena(153), Kuat(4), Elrood(102), Khomm(18), Tawl(155), Vendaxa(55)
 
@@ -210,5 +227,71 @@ describe('C102: Live Long and Porsper — Fuel Edge', () => {
     expect(result.success).toBe(true)
     expect(result.timedOut).toBeFalsy()
     expect(Math.round(result.effectiveFuel)).toBe(2915)
+  }, 10_000)
+})
+
+// ── This Is The Way challenges (2026-05-13) ──────────────────────────────────
+// Start: Katarr(152), Mandatory: Ithor(60), Trellen(14), Constancia(19)
+
+// C103: Direct Connection — no forbidden, no bonuses
+describe('C103: This Is The Way — Direct Connection', () => {
+  it('finds optimal route scoring 1887 CX', () => {
+    const result = solve({
+      planets: PLANETS,
+      routes: ROUTES,
+      startPlanetId: KATARR,
+      mandatoryIds: TITW_MANDATORIES,
+      forbiddenIds: [],
+      bonuses: [],
+    })
+    expect(result.success).toBe(true)
+    expect(result.timedOut).toBeFalsy()
+    expect(Math.round(result.effectiveFuel)).toBe(1887)
+  }, 10_000)
+})
+
+// C104: Fury Road — Tirahnn, Salliche, Chardaan forbidden
+describe('C104: This Is The Way — Fury Road', () => {
+  it('finds optimal route scoring 1980 CX', () => {
+    const result = solve({
+      planets: PLANETS,
+      routes: ROUTES,
+      startPlanetId: KATARR,
+      mandatoryIds: TITW_MANDATORIES,
+      forbiddenIds: TITW_FORBIDDEN,
+      bonuses: [],
+    })
+    expect(result.success).toBe(true)
+    expect(result.timedOut).toBeFalsy()
+    expect(Math.round(result.effectiveFuel)).toBe(1980)
+  }, 10_000)
+})
+
+// C105: Open Road — forbidden + 11 bonus planets
+describe('C105: This Is The Way — Open Road', () => {
+  it('finds optimal route scoring 1554 CX', () => {
+    const result = solve({
+      planets: PLANETS,
+      routes: ROUTES,
+      startPlanetId: KATARR,
+      mandatoryIds: TITW_MANDATORIES,
+      forbiddenIds: TITW_FORBIDDEN,
+      bonuses: [
+        { planetId: KINYEN,   value: 300 },
+        { planetId: TERMINUS, value: 600 },
+        { planetId: KIRA,     value: 400 },
+        { planetId: ATRAVIS,  value:  50 },
+        { planetId: MUSTAFAR, value:  50 },
+        { planetId: ZYGERRIA, value: 400 },
+        { planetId: MALACHOR, value: 400 },
+        { planetId: CANTONICA,value: 400 },
+        { planetId: BONADAN,  value: 200 },
+        { planetId: DANTOOINE,value: 400 },
+        { planetId: MANDALORE,value: 100 },
+      ],
+    })
+    expect(result.success).toBe(true)
+    expect(result.timedOut).toBeFalsy()
+    expect(Math.round(result.effectiveFuel)).toBe(1554)
   }, 10_000)
 })
