@@ -178,7 +178,6 @@ const MAX_HK_N = 11  // heldKarpGen is used for fLen ≤ this; DP fallback for f
 function orienteeringDPCandidates(
   allKeyDense: number[],    // [startDense, m0..mM-1, b0..bB-1]
   mandatoryCount: number,
-  bonusCount: number,
   sp: AllPairsSP,
   bonusValueByDense: ReadonlyMap<number, number>,
 ): { bonusMask: number; lbCost: number; dpKeySeq: number[] }[] {
@@ -317,7 +316,7 @@ export function heldKarpSolve(input: SolveInput): SolveResult {
   // within each subset for small fLen (complete, correct), DP ordering for large fLen (no OOM).
   const allKeyDense = [startIdx, ...mandatoryIdxs, ...validBonuses.map(b => bonusIdxByPlanetId.get(b.planetId)!)]
   const bonusCandidates = orienteeringDPCandidates(
-    allKeyDense, mandatoryIdxs.length, validBonuses.length, sp, bonusValueByDense,
+    allKeyDense, mandatoryIdxs.length, sp, bonusValueByDense,
   )
 
   for (const { bonusMask, lbCost, dpKeySeq } of bonusCandidates) {
