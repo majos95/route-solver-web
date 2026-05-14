@@ -4,16 +4,34 @@ import type { AllPairsSP } from './allPairsSP'
 import { buildCostMatrix } from './costMatrix'
 import { computeAllPairsSP } from './allPairsSP'
 import { heldKarpGen } from './heldKarp'
-import { MinHeap } from './heap'
 
 const TIMEOUT_MS = 5 * 60 * 1000
 
-// Find transit nodes that appear as intermediates on 2+ segment SP paths in this ordering.
-// These bottleneck nodes are tracked in the DP bitmask so consuming one in an early segment
-// doesn't silently block a later segment from using the same node.
-// Target state count for realizeOrderingDP: (segCount+1) × n × 2^K.
-// Keeping this under ~30k gives ~20ms per ordering at typical JS speed.
+// Target state count per Dijkstra call: (segCount+1) × n × 2^K.
+// Lower value = smaller state space = faster per call; K drops from 6 to 3-4 for typical inputs.
+// Target state count per Dijkstra call: (segCount+1) × n × 2^K.
+// For T16 (fLen=8, ordering.length=9, segCount=8, n=194):
+//   maxK = floor(log2(120000 / (9×194))) = 6; totalStates = 9×194×64 = 111,744.
+// Reducing below 120K silently drops K from 6 to 5 for 8-segment orderings, causing wrong answers.
 const MAX_DP_STATES = 120_000
+// Fixed heap capacity per Dijkstra call. With K=6 and 111K states, the frontier can
+// transiently hold many entries (each state may be pushed multiple times before settling).
+// 1M entries = 12 MB pre-allocated; enough headroom even for dense orderings.
+const HEAP_CAP = 1_000_000
+
+// Working buffers shared across all realizeOrderingDP calls within one heldKarpSolve.
+// Pre-allocating eliminates per-call TypedArray alloc (GC pressure) and
+// per-push object boxing (the old MinHeap<number> allocated a [number,number] per push).
+interface DpWork {
+  dist:    Float64Array  // [MAX_DP_STATES]
+  parent:  Int32Array    // [MAX_DP_STATES]
+  stopOf:  Int32Array    // [n] stop-index per node (−1 if not a forced stop)
+  keyBit:  Int32Array    // [n] bitmask bit per key node (0 otherwise)
+  forbArr: Uint8Array    // [n] 1 if forbidden
+  hPri:    Float64Array  // [HEAP_CAP] typed-heap priorities
+  hVal:    Int32Array    // [HEAP_CAP] typed-heap state ids
+  hSz:     number        // current heap size (reset to 0 before each Dijkstra)
+}
 
 function identifyKeyNodes(
   ordering: number[],
@@ -43,17 +61,59 @@ function identifyKeyNodes(
     .map(([node]) => node)
 }
 
+// Typed min-heap push — no boxing, operates on shared TypedArrays in DpWork.
+function hpush(dpw: DpWork, p: number, v: number): void {
+  if (dpw.hSz >= HEAP_CAP) return  // overflow guard; should not trigger in practice
+  let i = dpw.hSz++
+  dpw.hPri[i] = p; dpw.hVal[i] = v
+  while (i > 0) {
+    const par = (i - 1) >> 1
+    if (dpw.hPri[par] <= dpw.hPri[i]) break
+    const tp = dpw.hPri[par]; dpw.hPri[par] = dpw.hPri[i]; dpw.hPri[i] = tp
+    const tv = dpw.hVal[par]; dpw.hVal[par] = dpw.hVal[i]; dpw.hVal[i] = tv
+    i = par
+  }
+}
+
+// Typed min-heap pop — returns the state id; caller reads dpw.hPri[0] for priority BEFORE calling.
+function hpop(dpw: DpWork): number {
+  const rv = dpw.hVal[0]
+  const last = --dpw.hSz
+  if (last > 0) {
+    dpw.hPri[0] = dpw.hPri[last]; dpw.hVal[0] = dpw.hVal[last]
+    let i = 0
+    while (true) {
+      let sm = i
+      const l = 2 * i + 1, r = 2 * i + 2
+      if (l < dpw.hSz && dpw.hPri[l] < dpw.hPri[sm]) sm = l
+      if (r < dpw.hSz && dpw.hPri[r] < dpw.hPri[sm]) sm = r
+      if (sm === i) break
+      const tp = dpw.hPri[sm]; dpw.hPri[sm] = dpw.hPri[i]; dpw.hPri[i] = tp
+      const tv = dpw.hVal[sm]; dpw.hVal[sm] = dpw.hVal[i]; dpw.hVal[i] = tv
+      i = sm
+    }
+  }
+  return rv
+}
+
 // Realize one Held-Karp ordering via DP on joint state (segment, planet, keyNodeMask).
 // Tracks which bottleneck transit nodes have been consumed across segments so that
 // later segments can route around them rather than taking expensive repairs.
 // Returns null if no valid simple path exists for this ordering.
+//
+// stopOf encoding: stopOf[v] = i means v is stops[i].
+//   • i ∈ 1..segCount−1  → a non-start forced stop (mandatory or bonus)
+//   • i = segCount        → startDense (the return position); blocks it as a future stop
+//                           in all but the final segment, naturally.
+//   • −1                  → not a forced stop; transit freely allowed.
 function realizeOrderingDP(
-  ordering: number[],            // indices into forcedIdxs; first and last are both 0 (= start)
-  forcedIdxs: number[],         // forcedIdxs[i] = dense index of i-th forced stop
+  ordering: number[],
+  forcedIdxs: number[],
   sp: AllPairsSP,
-  baseForbidden: ReadonlySet<number>,
   matrix: CostMatrix,
   bonusValueByDense: ReadonlyMap<number, number>,
+  dpw: DpWork,
+  cutoff: number,  // best.effectiveFuel + bonusCredit; prune states whose cost+lb ≥ cutoff
 ): { route: number[]; gross: number; collected: number } | null {
   const { n, data } = matrix
   const segCount = ordering.length - 1
@@ -64,84 +124,106 @@ function realizeOrderingDP(
   const keyNodes = identifyKeyNodes(ordering, forcedIdxs, sp, forcedSet, n, segCount)
   const K = keyNodes.length
   const maskCount = 1 << K
-  const keyBit = new Map<number, number>()
-  for (let k = 0; k < K; k++) keyBit.set(keyNodes[k], 1 << k)
+
+  // Set up keyBit (pre-allocated, all-zero; reset positions after call)
+  const keyBit = dpw.keyBit
+  for (let k = 0; k < K; k++) keyBit[keyNodes[k]] = 1 << k
+
+  // Set up stopOf (pre-allocated, all −1; reset positions after call)
+  const stopOf = dpw.stopOf
+  for (let i = 1; i < segCount; i++) stopOf[stops[i]] = i
+  stopOf[startDense] = segCount  // blocks start as future stop until the final return segment
+
+  // Precompute per-segment SP rows and suffix lower bounds for B&B pruning.
+  // spRows[s] = sp.spCost from stops[s+1] (= SP from stops[s+1] to all planets, used reversed by symmetry)
+  // suffix[s] = abstract lower bound on remaining cost FROM stops[s] to destination
+  const spRows: (Float64Array | undefined)[] = new Array(segCount)
+  const suffix = new Float64Array(segCount + 1)
+  for (let s = 0; s < segCount; s++) spRows[s] = sp.spCost.get(stops[s + 1])
+  for (let s = segCount - 1; s >= 1; s--) {
+    suffix[s] = (sp.spCost.get(stops[s])?.[stops[s + 1]] ?? 0) + suffix[s + 1]
+  }
 
   // State encoding: (seg * n + planet) * maskCount + mask
   const encode = (seg: number, planet: number, mask: number) =>
     (seg * n + planet) * maskCount + mask
 
   const totalStates = (segCount + 1) * n * maskCount
-  const dist = new Float64Array(totalStates).fill(Infinity)
-  const parent = new Int32Array(totalStates).fill(-2)  // -2 = unvisited, -1 = root
 
-  // Per-segment forbidden sets:
-  //   past: stops already visited (stops[1..seg]) — must not revisit
-  //   future: stops not yet targeted (stops[seg+2..segCount]) — must not transit through prematurely
-  const segPast: Set<number>[] = []
-  const segFuture: Set<number>[] = []
-  for (let s = 0; s < segCount; s++) {
-    const past = new Set<number>()
-    for (let k = 1; k <= s; k++) past.add(stops[k])
-    segPast.push(past)
-    const future = new Set<number>()
-    for (let k = s + 2; k <= segCount; k++) future.add(stops[k])
-    segFuture.push(future)
-  }
+  // Reset only the used slice of pre-allocated arrays
+  const dist   = dpw.dist
+  const parent = dpw.parent
+  dist.fill(Infinity, 0, totalStates)
+  parent.fill(-2, 0, totalStates)
 
-  const initialMask = keyBit.get(startDense) ?? 0
-  const startState = encode(0, startDense, initialMask)
+  dpw.hSz = 0
+  const startState = encode(0, startDense, 0)  // startDense is never a key node (filtered by forcedSet)
   dist[startState] = 0
   parent[startState] = -1
+  hpush(dpw, 0, startState)
 
-  const pq = new MinHeap<number>()
-  pq.push(0, startState)
   let bestState = -1
 
-  while (pq.size > 0) {
-    const [d, state] = pq.pop()!
+  while (dpw.hSz > 0) {
+    const d = dpw.hPri[0]  // peek priority before pop
+    const state = hpop(dpw)
     if (d > dist[state]) continue
 
     const mask = state % maskCount
-    const rem = (state / maskCount) | 0
+    const rem  = (state / maskCount) | 0
     const planet = rem % n
-    const seg = (rem / n) | 0
+    const seg    = (rem / n) | 0
 
     if (seg === segCount) {
       bestState = state  // first pop at segCount is Dijkstra-optimal — stop immediately
       break
     }
 
-    const past = segPast[seg]
-    const future = segFuture[seg]
+    // B&B pruning: lower bound on remaining gross = SP(planet→nextStop) + suffix[seg+1].
+    // If current gross + remaining lb ≥ cutoff, this state can't improve the current best.
+    // (Graph is symmetric so spRows[seg][planet] = SP from planet to stops[seg+1].)
+    const hRemain = (spRows[seg]?.[planet] ?? Infinity) + suffix[seg + 1]
+    if (d + hRemain >= cutoff) continue
+
     const nextStop = stops[seg + 1]
     const base = planet * n
 
     for (let w = 0; w < n; w++) {
       if (w === planet) continue
-      if (baseForbidden.has(w)) continue
-      const wBit = keyBit.get(w) ?? 0
-      if (wBit && (mask & wBit)) continue  // key node already consumed
-      if (past.has(w)) continue            // already-visited forced stop
-      if (future.has(w)) continue          // future forced stop — premature transit
+      if (dpw.forbArr[w]) continue
+
+      const wBit = keyBit[w]
+      if (wBit && (mask & wBit)) continue  // key node already consumed in this path
+
+      const ws = stopOf[w]
+      if (ws !== -1) {
+        if (ws <= seg) continue    // past forced stop — already visited
+        if (ws > seg + 1) continue // future forced stop — premature transit
+        // ws === seg + 1 → this is the next stop; allowed, advances segment below
+      }
 
       const newMask = mask | wBit
-      const newSeg = w === nextStop ? seg + 1 : seg
+      const newSeg  = w === nextStop ? seg + 1 : seg
       const nd = d + data[base + w]
       const ns = encode(newSeg, w, newMask)
       if (nd < dist[ns]) {
         dist[ns] = nd
         parent[ns] = state
-        pq.push(nd, ns)
+        hpush(dpw, nd, ns)
       }
     }
   }
 
-  if (!isFinite(dist[bestState] ?? Infinity)) return null
+  // Restore pre-allocated arrays to their default values
+  for (let i = 1; i < segCount; i++) stopOf[stops[i]] = -1
+  stopOf[startDense] = -1
+  for (let k = 0; k < K; k++) keyBit[keyNodes[k]] = 0
+
+  if (bestState === -1) return null
 
   // Reconstruct dense-index route by following parent pointers
   const routeDense: number[] = []
-  let cur: number = bestState
+  let cur = bestState
   while (cur !== -1) {
     routeDense.unshift(((cur / maskCount) | 0) % n)
     cur = parent[cur]
@@ -275,7 +357,7 @@ export function heldKarpSolve(input: SolveInput): SolveResult {
 
   // Step 1: cost matrix
   const matrix = buildCostMatrix(planets, routes)
-  const { idToIdx, idxToId } = matrix
+  const { idToIdx, idxToId, n } = matrix
 
   const startIdx = idToIdx.get(startPlanetId)!
   const forbiddenDenseSet = new Set(
@@ -303,6 +385,20 @@ export function heldKarpSolve(input: SolveInput): SolveResult {
       }
     }
   }
+
+  // Pre-allocate working buffers shared across all realizeOrderingDP calls.
+  // Eliminates per-call TypedArray allocation (GC pressure) and per-push object boxing.
+  const dpw: DpWork = {
+    dist:    new Float64Array(MAX_DP_STATES),
+    parent:  new Int32Array(MAX_DP_STATES),
+    stopOf:  new Int32Array(n).fill(-1),
+    keyBit:  new Int32Array(n),
+    forbArr: new Uint8Array(n),
+    hPri:    new Float64Array(HEAP_CAP),
+    hVal:    new Int32Array(HEAP_CAP),
+    hSz:     0,
+  }
+  for (const idx of forbiddenDenseSet) dpw.forbArr[idx] = 1
 
   const deadline = Date.now() + TIMEOUT_MS
 
@@ -352,7 +448,7 @@ export function heldKarpSolve(input: SolveInput): SolveResult {
           if (bonusMask & (1 << b)) kiToPos[M + 1 + b] = M + 1 + bRank++
         }
         const dpOrdering = dpKeySeq.map((ki) => kiToPos[ki])
-        const dpWarm = realizeOrderingDP(dpOrdering, forcedIdxs, sp, forbiddenDenseSet, matrix, bonusValueByDense)
+        const dpWarm = realizeOrderingDP(dpOrdering, forcedIdxs, sp, matrix, bonusValueByDense, dpw, best.effectiveFuel + bonusCredit)
         if (dpWarm !== null) {
           const dpEff = dpWarm.gross - dpWarm.collected
           if (dpEff < best.effectiveFuel) {
@@ -367,7 +463,7 @@ export function heldKarpSolve(input: SolveInput): SolveResult {
       for (const { ordering, cost: lbOrd } of heldKarpGen(fLen, hkCosts)) {
         if (Date.now() >= deadline) { best.timedOut = true; break }
         if (lbOrd - bonusCredit >= best.effectiveFuel) break
-        const result = realizeOrderingDP(ordering, forcedIdxs, sp, forbiddenDenseSet, matrix, bonusValueByDense)
+        const result = realizeOrderingDP(ordering, forcedIdxs, sp, matrix, bonusValueByDense, dpw, best.effectiveFuel + bonusCredit)
         if (result === null) continue
         const effective = result.gross - result.collected
         if (effective < best.effectiveFuel) {
@@ -382,7 +478,7 @@ export function heldKarpSolve(input: SolveInput): SolveResult {
       const forcedSeq    = dpKeySeq.slice(0, -1)
       const forcedDpIdxs = forcedSeq.map(ki => allKeyDense[ki])
       const ordering     = forcedSeq.map((_, i) => i).concat([0])
-      const result = realizeOrderingDP(ordering, forcedDpIdxs, sp, forbiddenDenseSet, matrix, bonusValueByDense)
+      const result = realizeOrderingDP(ordering, forcedDpIdxs, sp, matrix, bonusValueByDense, dpw, best.effectiveFuel + bonusCredit)
       if (result !== null) {
         const effective = result.gross - result.collected
         if (effective < best.effectiveFuel) {
