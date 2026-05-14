@@ -18,6 +18,7 @@ interface Props {
   challenges: ChallengeOut[]
   planets: Planet[]
   routes: Route[]
+  dryRun?: boolean
   onBack: () => void
 }
 
@@ -25,7 +26,7 @@ function fmt(ms: number) {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`
 }
 
-export function AutoSolvePanel({ challenges, planets, routes, onBack }: Props) {
+export function AutoSolvePanel({ challenges, planets, routes, dryRun = false, onBack }: Props) {
   const itemsRef = useRef<{ challenge: ChallengeOut; solveInput: SolveInput }[]>([])
   if (itemsRef.current.length === 0) {
     itemsRef.current = challenges
@@ -171,7 +172,7 @@ export function AutoSolvePanel({ challenges, planets, routes, onBack }: Props) {
         })}
       </div>
 
-      {allDone && anySuccess && !allSubmitted && (
+      {allDone && anySuccess && !allSubmitted && !dryRun && (
         <div className="auto-solve-actions">
           {!submitConfirm ? (
             <button className="btn-primary" onClick={() => setSubmitConfirm(true)} disabled={submitting}>

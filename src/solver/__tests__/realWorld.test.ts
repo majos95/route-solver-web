@@ -155,6 +155,78 @@ describe('T19: Coruscant Level 3', () => {
   }, 10_000)
 })
 
+// The Myth of Sisyphus challenge IDs (2026-05-14)
+const MYTUS      = 170
+const CEREA      = 69
+const HYPORI     = 107
+const PHINDAR    = 111
+const BESTINE    = 28
+const MILAGRO    = 184
+const POLIS_MASSA = 101
+const RODIA      = 81
+const JAMINERE   = 146
+const CONTRUUM   = 56
+
+const TMOS_MANDATORIES = [CEREA, HYPORI, PHINDAR]
+const TMOS_FORBIDDEN   = [BESTINE, MILAGRO, GIZER]
+
+// C106: Stars' End — no forbidden, no bonuses
+describe('C106: The Myth of Sisyphus — Stars\' End', () => {
+  it('finds optimal route scoring 4978 CX', () => {
+    const result = solve({
+      planets: PLANETS,
+      routes: ROUTES,
+      startPlanetId: MYTUS,
+      mandatoryIds: TMOS_MANDATORIES,
+      forbiddenIds: [],
+      bonuses: [],
+    })
+    expect(result.success).toBe(true)
+    expect(result.timedOut).toBeFalsy()
+    expect(Math.round(result.effectiveFuel)).toBe(4978)
+  }, 10_000)
+})
+
+// C107: Corporate Sector Authority — Bestine, Milagro, Gizer forbidden
+describe('C107: The Myth of Sisyphus — Corporate Sector Authority', () => {
+  it('finds optimal route scoring 5091 CX', () => {
+    const result = solve({
+      planets: PLANETS,
+      routes: ROUTES,
+      startPlanetId: MYTUS,
+      mandatoryIds: TMOS_MANDATORIES,
+      forbiddenIds: TMOS_FORBIDDEN,
+      bonuses: [],
+    })
+    expect(result.success).toBe(true)
+    expect(result.timedOut).toBeFalsy()
+    expect(Math.round(result.effectiveFuel)).toBe(5091)
+  }, 10_000)
+})
+
+// C108: Wild Space — forbidden + 5 bonus planets
+describe('C108: The Myth of Sisyphus — Wild Space', () => {
+  it('finds optimal route scoring 4721 CX', () => {
+    const result = solve({
+      planets: PLANETS,
+      routes: ROUTES,
+      startPlanetId: MYTUS,
+      mandatoryIds: TMOS_MANDATORIES,
+      forbiddenIds: TMOS_FORBIDDEN,
+      bonuses: [
+        { planetId: POLIS_MASSA, value: 300 },
+        { planetId: RODIA,       value: 150 },
+        { planetId: JAMINERE,    value: 100 },
+        { planetId: GHORMAN,     value: 250 },
+        { planetId: CONTRUUM,    value: 100 },
+      ],
+    })
+    expect(result.success).toBe(true)
+    expect(result.timedOut).toBeFalsy()
+    expect(Math.round(result.effectiveFuel)).toBe(4721)
+  }, 10_000)
+})
+
 // This Is The Way challenge IDs
 const KATARR     = 152
 const ITHOR      = 60

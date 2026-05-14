@@ -5,6 +5,8 @@ import type { ChallengeOut } from './state/useChallenges'
 import { ChallengeList } from './ui/ChallengeList'
 import { SolutionView } from './ui/SolutionView'
 import { AutoSolvePanel } from './ui/AutoSolvePanel'
+import { PollingSolvePanel } from './ui/PollingSolvePanel'
+import { TestRunnerPanel } from './ui/TestRunnerPanel'
 import { Spinner } from './ui/components/Spinner'
 import { RawJson } from './ui/components/RawJson'
 import { adaptChallenge } from './solver/adapters'
@@ -81,7 +83,7 @@ function AppInner() {
   const [solution, setSolution] = useState<SolutionState | null>(null)
   const [solveError, setSolveError] = useState<string | null>(null)
   const [elapsedMs, setElapsedMs] = useState(0)
-  const [autoSolving, setAutoSolving] = useState(false)
+  const [view, setView] = useState<'main' | 'dry-run' | 'auto-solve' | 'tests'>('main')
 
   const workerRef = useRef<Worker | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -141,14 +143,23 @@ function AppInner() {
     setSolveError('Cancelled after ' + fmt(elapsedMs))
   }, [elapsedMs])
 
-  if (autoSolving && gameMap && challenges) {
+  if (view === 'tests') {
+    return <div className="app"><TestRunnerPanel onBack={() => setView('main')} /></div>
+  }
+
+  if (view === 'auto-solve') {
+    return <div className="app"><PollingSolvePanel onBack={() => setView('main')} /></div>
+  }
+
+  if (view === 'dry-run' && gameMap && challenges) {
     return (
       <div className="app">
         <AutoSolvePanel
           challenges={challenges}
           planets={gameMap.planets}
           routes={gameMap.routes}
-          onBack={() => setAutoSolving(false)}
+          dryRun
+          onBack={() => setView('main')}
         />
       </div>
     )
@@ -207,10 +218,24 @@ function AppInner() {
               <div className="auto-solve-bar">
                 <button
                   className="btn-primary"
-                  onClick={() => { setSolution(null); setAutoSolving(true) }}
+                  onClick={() => setView('auto-solve')}
                   disabled={solvingId !== null}
                 >
-                  Auto-Solve All
+                  Auto-Solve
+                </button>
+                <button
+                  className="btn-secondary"
+                  onClick={() => { setSolution(null); setView('dry-run') }}
+                  disabled={solvingId !== null}
+                >
+                  Dry Run
+                </button>
+                <button
+                  className="btn-secondary"
+                  onClick={() => setView('tests')}
+                  disabled={solvingId !== null}
+                >
+                  Run Tests
                 </button>
               </div>
               <ChallengeList

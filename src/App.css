@@ -83,6 +83,8 @@ button {
 button:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-primary { background: #3b82f6; color: #fff; }
 .btn-primary:not(:disabled):hover { background: #2563eb; }
+.btn-secondary { background: #334155; color: #e2e8f0; }
+.btn-secondary:not(:disabled):hover { background: #475569; }
 .btn-back {
   background: transparent;
   color: #94a3b8;
@@ -283,6 +285,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 /* Auto-solve bar */
 .auto-solve-bar {
   display: flex;
+  gap: 8px;
   justify-content: flex-end;
   margin-bottom: 12px;
 }

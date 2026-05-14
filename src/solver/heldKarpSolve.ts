@@ -11,11 +11,17 @@ const TIMEOUT_MS = 5 * 60 * 1000
 // Find transit nodes that appear as intermediates on 2+ segment SP paths in this ordering.
 // These bottleneck nodes are tracked in the DP bitmask so consuming one in an early segment
 // doesn't silently block a later segment from using the same node.
+// Target state count for realizeOrderingDP: (segCount+1) × n × 2^K.
+// Keeping this under ~30k gives ~20ms per ordering at typical JS speed.
+const MAX_DP_STATES = 120_000
+
 function identifyKeyNodes(
   ordering: number[],
   forcedIdxs: number[],
   sp: AllPairsSP,
   forcedSet: ReadonlySet<number>,
+  n: number,
+  segCount: number,
 ): number[] {
   const freq = new Map<number, number>()
   for (let i = 0; i < ordering.length - 1; i++) {
@@ -29,10 +35,11 @@ function identifyKeyNodes(
       freq.set(node, (freq.get(node) ?? 0) + 1)
     }
   }
+  const maxK = Math.max(0, Math.floor(Math.log2(MAX_DP_STATES / ((segCount + 1) * n))))
   return [...freq.entries()]
     .filter(([, f]) => f >= 2)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
+    .slice(0, maxK)
     .map(([node]) => node)
 }
 
@@ -54,7 +61,7 @@ function realizeOrderingDP(
   const startDense = stops[0]
 
   const forcedSet = new Set(forcedIdxs)
-  const keyNodes = identifyKeyNodes(ordering, forcedIdxs, sp, forcedSet)
+  const keyNodes = identifyKeyNodes(ordering, forcedIdxs, sp, forcedSet, n, segCount)
   const K = keyNodes.length
   const maskCount = 1 << K
   const keyBit = new Map<number, number>()
