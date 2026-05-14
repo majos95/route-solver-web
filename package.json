@@ -12,8 +12,7 @@
     "build": "tsc && vite build",
     "test": "vitest run",
     "solve": "tsx --env-file=.env.local scripts/auto-solve.ts",
-    "solve:dry": "DRY_RUN=true tsx --env-file=.env.local scripts/auto-solve.ts",
-    "build:lambda": "esbuild lambda/handler.ts lambda/handler-dry-run.ts --bundle --platform=node --target=node20 --format=cjs --outdir=dist/lambda && echo '{\"type\":\"commonjs\"}' > dist/lambda/package.json"
+    "solve:dry": "DRY_RUN=true tsx --env-file=.env.local scripts/auto-solve.ts"
   },
   "dependencies": {
     "openapi-fetch": "^0.13.0",
@@ -25,7 +24,6 @@
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
-    "esbuild": "^0.28.0",
     "openapi-typescript": "^7.13.0",
     "swagger2openapi": "^7.0.0",
     "tsx": "^4.21.0",

@@ -155,6 +155,148 @@ describe('T19: Coruscant Level 3', () => {
   }, 10_000)
 })
 
+// C84-C86 challenge IDs (start: Nubia)
+const POLIS_MASSA = 101
+const NUBIA      = 10
+const BYBLOS     = 29
+const ROONA      = 45
+const ISDE_NAHA  = 157
+const ANTAR      = 33
+const MIMBAN     = 53
+const GYNDINE    = 54
+const NANTHRI    = 182
+
+const C8X_MANDATORIES = [POLIS_MASSA, FARSTINE]
+const C8X_FORBIDDEN   = [BYBLOS, ROONA, ISDE_NAHA]
+
+// C84: no forbidden, no bonuses
+describe('C84: Nubia Challenge — Level 1', () => {
+  it('finds optimal route scoring 2128 CX', () => {
+    const result = solve({
+      planets: PLANETS,
+      routes: ROUTES,
+      startPlanetId: NUBIA,
+      mandatoryIds: C8X_MANDATORIES,
+      forbiddenIds: [],
+      bonuses: [],
+    })
+    expect(result.success).toBe(true)
+    expect(result.timedOut).toBeFalsy()
+    expect(Math.round(result.effectiveFuel)).toBe(2128)
+  }, 10_000)
+})
+
+// C85: Byblos, Roona, IsdeNaha forbidden
+describe('C85: Nubia Challenge — Level 2', () => {
+  it('finds optimal route scoring 2275 CX', () => {
+    const result = solve({
+      planets: PLANETS,
+      routes: ROUTES,
+      startPlanetId: NUBIA,
+      mandatoryIds: C8X_MANDATORIES,
+      forbiddenIds: C8X_FORBIDDEN,
+      bonuses: [],
+    })
+    expect(result.success).toBe(true)
+    expect(result.timedOut).toBeFalsy()
+    expect(Math.round(result.effectiveFuel)).toBe(2275)
+  }, 10_000)
+})
+
+// C86: forbidden + 5 bonus planets
+describe('C86: Nubia Challenge — Level 3', () => {
+  it('finds optimal route scoring 1980 CX', () => {
+    const result = solve({
+      planets: PLANETS,
+      routes: ROUTES,
+      startPlanetId: NUBIA,
+      mandatoryIds: C8X_MANDATORIES,
+      forbiddenIds: C8X_FORBIDDEN,
+      bonuses: [
+        { planetId: ANTAR,   value: 150 },
+        { planetId: MIMBAN,  value: 200 },
+        { planetId: GYNDINE, value: 150 },
+        { planetId: NANTHRI, value: 200 },
+        { planetId: EXODEEN, value: 100 },
+      ],
+    })
+    expect(result.success).toBe(true)
+    expect(result.timedOut).toBeFalsy()
+    expect(Math.round(result.effectiveFuel)).toBe(1980)
+  }, 10_000)
+})
+
+// C93-C95 challenge IDs (start: Hok)
+const HOK        = 25
+const CORELLIA   = 3
+const SHILI      = 49
+const RUUSAN     = 62
+const DATHOMIR   = 88
+const PALANHI    = 175
+const HAPES      = 40
+const CORSIN     = 51
+const ORINDA     = 179
+const BOROSK     = 172
+
+const C9X_MANDATORIES = [CORELLIA, ANTAR, SHILI, RUUSAN, DATHOMIR, PALANHI]
+const C9X_FORBIDDEN   = [CORUSCANT, HAPES, CORSIN, ORINDA]
+
+// C93: no forbidden, no bonuses
+describe('C93: Hok Challenge — Level 1', () => {
+  it('finds optimal route scoring 2303 CX', () => {
+    const result = solve({
+      planets: PLANETS,
+      routes: ROUTES,
+      startPlanetId: HOK,
+      mandatoryIds: C9X_MANDATORIES,
+      forbiddenIds: [],
+      bonuses: [],
+    })
+    expect(result.success).toBe(true)
+    expect(result.timedOut).toBeFalsy()
+    expect(Math.round(result.effectiveFuel)).toBe(2303)
+  }, 10_000)
+})
+
+// C94: Coruscant, Hapes, Corsin, Orinda forbidden
+describe('C94: Hok Challenge — Level 2', () => {
+  it('finds optimal route scoring 2527 CX', () => {
+    const result = solve({
+      planets: PLANETS,
+      routes: ROUTES,
+      startPlanetId: HOK,
+      mandatoryIds: C9X_MANDATORIES,
+      forbiddenIds: C9X_FORBIDDEN,
+      bonuses: [],
+    })
+    expect(result.success).toBe(true)
+    expect(result.timedOut).toBeFalsy()
+    expect(Math.round(result.effectiveFuel)).toBe(2527)
+  }, 10_000)
+})
+
+// C95: forbidden + Tirahnn(100), Denon(100), Borosk(400), Chardaan(300) bonuses
+describe('C95: Hok Challenge — Level 3', () => {
+  it('finds optimal route scoring 2461 CX', () => {
+    const result = solve({
+      planets: PLANETS,
+      routes: ROUTES,
+      startPlanetId: HOK,
+      mandatoryIds: C9X_MANDATORIES,
+      forbiddenIds: C9X_FORBIDDEN,
+      bonuses: [
+        { planetId: TIRAHNN, value: 100 },
+        { planetId: DENON,   value: 100 },
+        { planetId: BOROSK,  value: 400 },
+        { planetId: CHARDAAN,value: 300 },
+      ],
+    })
+    expect(result.success).toBe(true)
+    expect(result.timedOut).toBeFalsy()
+    expect(Math.round(result.effectiveFuel)).toBe(2461)
+  }, 10_000)
+})
+
 // The Myth of Sisyphus challenge IDs (2026-05-14)
 const MYTUS      = 170
 const CEREA      = 69
@@ -162,7 +304,6 @@ const HYPORI     = 107
 const PHINDAR    = 111
 const BESTINE    = 28
 const MILAGRO    = 184
-const POLIS_MASSA = 101
 const RODIA      = 81
 const JAMINERE   = 146
 const CONTRUUM   = 56
