@@ -11,12 +11,13 @@ const TIMEOUT_MS = 5 * 60 * 1000
 // Lower value = smaller state space = faster per call; K drops from 6 to 3-4 for typical inputs.
 // Target state count per Dijkstra call: (segCount+1) × n × 2^K.
 // For T16 (fLen=8, ordering.length=9, segCount=8, n=194):
-//   maxK = floor(log2(120000 / (9×194))) = 6; totalStates = 9×194×64 = 111,744.
-// Reducing below 120K silently drops K from 6 to 5 for 8-segment orderings, causing wrong answers.
-const MAX_DP_STATES = 120_000
-// Fixed heap capacity per Dijkstra call. With K=6 and 111K states, the frontier can
-// transiently hold many entries (each state may be pushed multiple times before settling).
-// 1M entries = 12 MB pre-allocated; enough headroom even for dense orderings.
+// For fLen=8 (T16): maxK = floor(log2(150000/(9×194))) = floor(6.42) = 6; states = 111,744.
+// For fLen=11 (C102 all-bonuses): maxK = floor(log2(150000/(12×194))) = floor(6.01) = 6; states = 148,608.
+// 150K gives K=6 for both fLen=8 and fLen=11. Must stay ≥ 120K to keep K=6 for fLen=8.
+// K=6 for fLen=11 tracks one extra bottleneck transit node, reducing false simple-path results.
+const MAX_DP_STATES = 150_000
+// Fixed heap capacity per Dijkstra call. With K=6 and 148K states (fLen=11), the frontier
+// can transiently hold many entries. 1M entries = 12 MB pre-allocated.
 const HEAP_CAP = 1_000_000
 
 // Working buffers shared across all realizeOrderingDP calls within one heldKarpSolve.
@@ -162,6 +163,10 @@ function realizeOrderingDP(
   parent[startState] = -1
   hpush(dpw, 0, startState)
 
+  // Per-neighbor B&B is only worthwhile when cutoff is finite; skip extra memory accesses
+  // when cutoff=Infinity (first dpWarm call before any bound is established).
+  const finiteCutoff = isFinite(cutoff)
+
   let bestState = -1
 
   while (dpw.hSz > 0) {
@@ -205,6 +210,13 @@ function realizeOrderingDP(
       const newMask = mask | wBit
       const newSeg  = w === nextStop ? seg + 1 : seg
       const nd = d + data[base + w]
+      // Per-neighbor B&B: prune before pushing to reduce heap churn.
+      // Only applied when cutoff is finite; skips extra memory accesses for the first
+      // (infinite-cutoff) dpWarm call that runs before any bound is established.
+      if (finiteCutoff) {
+        const hnw = newSeg < segCount ? (spRows[newSeg]?.[w] ?? Infinity) + suffix[newSeg + 1] : 0
+        if (nd + hnw >= cutoff) continue
+      }
       const ns = encode(newSeg, w, newMask)
       if (nd < dist[ns]) {
         dist[ns] = nd
