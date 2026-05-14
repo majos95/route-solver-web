@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { getDailyChallenge, getPlanetsAndRoutes, submitChallengeSolution } from '../api/client'
+import type { OracleResult } from '../api/client'
 import { adaptPlanet, adaptRoute, adaptChallenge } from '../solver/adapters'
 import type { SolveResult } from '../solver/types'
 import type { ChallengeOut } from '../state/useChallenges'
 import { Spinner } from './components/Spinner'
 
-const POLL_MS = 2_000
+const POLL_MS = 200
 
 function fmt(ms: number) {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`
@@ -26,7 +27,8 @@ interface EntryResult {
   route: string[]
   elapsed: number
   timedOut: boolean
-  submitMsg: string | null
+  submitResult: OracleResult | null
+  submitOk: boolean | null
 }
 
 interface Props {
@@ -114,12 +116,13 @@ export function PollingSolvePanel({ dryRun = false, onBack }: Props) {
         if (killedRef.current) break
 
         const elapsed = Date.now() - startMs
-        let submitMsg: string | null = null
+        let submitResult: OracleResult | null = null
+        let submitOk: boolean | null = null
 
         if (!dryRun && c.ChallengeId) {
           setPhase({ type: 'submitting', name: c.ChallengeName ?? '' })
-          const res = await submitChallengeSolution(c.ChallengeId, result.orderedRoute)
-          submitMsg = res ? `${res.FeedbackMessage ?? ''} | Coaxium: ${res.Coaxium}` : 'Submit failed'
+          submitResult = await submitChallengeSolution(c.ChallengeId, result.orderedRoute)
+          submitOk = submitResult?.IsSuccess ?? false
         }
 
         if (killedRef.current) break
@@ -134,7 +137,8 @@ export function PollingSolvePanel({ dryRun = false, onBack }: Props) {
             route: result.orderedRoute.map((p) => p.name),
             elapsed,
             timedOut: result.timedOut ?? false,
-            submitMsg,
+            submitResult,
+            submitOk,
           },
         ])
       }
@@ -197,8 +201,12 @@ export function PollingSolvePanel({ dryRun = false, onBack }: Props) {
                 effectiveFuel <strong>{e.fuel}</strong>
                 <span className="as-detail"> · gross {e.gross} · bonus {e.bonus}</span>
               </span>
-              {e.submitMsg && (
-                <div className="as-submit-status as-submit-done">{e.submitMsg}</div>
+              {e.submitOk !== null && (
+                <div className={`as-submit-status ${e.submitOk ? 'as-submit-done' : 'as-submit-failed'}`}>
+                  {e.submitOk
+                    ? `✓ ${e.submitResult?.Coaxium} coaxium${e.submitResult?.FeedbackMessage ? ' · ' + e.submitResult.FeedbackMessage : ''}`
+                    : `✗ ${e.submitResult?.FeedbackMessage ?? 'Submit failed'}`}
+                </div>
               )}
               <div className="route-chips">
                 {e.route.map((name, idx) => (
