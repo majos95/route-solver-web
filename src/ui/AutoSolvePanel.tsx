@@ -30,7 +30,7 @@ export function AutoSolvePanel({ challenges, planets, routes, dryRun = false, on
   const itemsRef = useRef<{ challenge: ChallengeOut; solveInput: SolveInput }[]>([])
   if (itemsRef.current.length === 0) {
     itemsRef.current = challenges
-      .filter((c) => !c.IsFinished && c.ChallengeId !== undefined)
+      .filter((c) => c.ChallengeId !== undefined && (dryRun || !c.IsFinished))
       .sort((a, b) => (a.ChallengeId ?? 0) - (b.ChallengeId ?? 0))
       .map((c) => ({ challenge: c, solveInput: adaptChallenge(c, planets, routes) }))
   }

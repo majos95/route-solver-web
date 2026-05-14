@@ -96,6 +96,7 @@ function realizeOrderingDP(
 
   const pq = new MinHeap<number>()
   pq.push(0, startState)
+  let bestState = -1
 
   while (pq.size > 0) {
     const [d, state] = pq.pop()!
@@ -106,7 +107,10 @@ function realizeOrderingDP(
     const planet = rem % n
     const seg = (rem / n) | 0
 
-    if (seg === segCount) continue
+    if (seg === segCount) {
+      bestState = state  // first pop at segCount is Dijkstra-optimal — stop immediately
+      break
+    }
 
     const past = segPast[seg]
     const future = segFuture[seg]
@@ -133,19 +137,11 @@ function realizeOrderingDP(
     }
   }
 
-  // Find best terminal: minimum cost over all key-node masks at (segCount, stops[segCount])
-  const terminalPlanet = stops[segCount]
-  let bestDist = Infinity
-  let bestState = -1
-  for (let mask = 0; mask < maskCount; mask++) {
-    const s = encode(segCount, terminalPlanet, mask)
-    if (dist[s] < bestDist) { bestDist = dist[s]; bestState = s }
-  }
-  if (!isFinite(bestDist)) return null
+  if (!isFinite(dist[bestState] ?? Infinity)) return null
 
   // Reconstruct dense-index route by following parent pointers
   const routeDense: number[] = []
-  let cur = bestState
+  let cur: number = bestState
   while (cur !== -1) {
     routeDense.unshift(((cur / maskCount) | 0) % n)
     cur = parent[cur]
@@ -344,6 +340,30 @@ export function heldKarpSolve(input: SolveInput): SolveResult {
         if (!row) continue
         for (let j = 0; j < fLen; j++) hkCosts[i * fLen + j] = row[forcedIdxs[j]]
       }
+
+      // Realize the DP-optimal ordering first to get a tight initial B&B bound.
+      // dpKeySeq indices are into allKeyDense; map them to forcedIdxs positions.
+      {
+        const M = mandatoryIdxs.length
+        const kiToPos: number[] = new Array(allKeyDense.length)
+        for (let i = 0; i <= M; i++) kiToPos[i] = i  // start + mandatory: same positions
+        let bRank = 0
+        for (let b = 0; b < validBonuses.length; b++) {
+          if (bonusMask & (1 << b)) kiToPos[M + 1 + b] = M + 1 + bRank++
+        }
+        const dpOrdering = dpKeySeq.map((ki) => kiToPos[ki])
+        const dpWarm = realizeOrderingDP(dpOrdering, forcedIdxs, sp, forbiddenDenseSet, matrix, bonusValueByDense)
+        if (dpWarm !== null) {
+          const dpEff = dpWarm.gross - dpWarm.collected
+          if (dpEff < best.effectiveFuel) {
+            best.effectiveFuel = dpEff
+            best.route         = dpWarm.route
+            best.gross         = dpWarm.gross
+            best.collected     = dpWarm.collected
+          }
+        }
+      }
+
       for (const { ordering, cost: lbOrd } of heldKarpGen(fLen, hkCosts)) {
         if (Date.now() >= deadline) { best.timedOut = true; break }
         if (lbOrd - bonusCredit >= best.effectiveFuel) break
